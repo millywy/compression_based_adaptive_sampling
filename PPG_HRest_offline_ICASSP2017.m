@@ -234,10 +234,58 @@ for idnb = 1 : allD
     end
     
     % Code to compute the error
+    % Mean Absolute Error (MAE):  Average difference between ground truth BPM and your Viterbi-smoothed estimates
     myErrorN(idnb) = mean(abs(BPM0 - moving(BPM_est_N(1:1:end)',4))); 
+    % Relative/Percentage Error: Error as a percentage of the true BPM
     myRelError(idnb) = mean(abs(BPM0 - moving(BPM_est_N(1:1:end)',4))./BPM0);
+    % Standard Deviation of Error: How consistent your errors are
     myErrorStd(idnb) = std(abs(BPM0 - moving(BPM_est_N(1:1:end)',4)));
     
 end
+
+% Err12: Mean error on training data with (std of errors)
+% Err11: Mean error on test data with (std of errors)
+% ErrAll: Overall mean error with (std of errors)
+
 fprintf('\nErr12=%2.2f(%2.2f), Err11=%2.2f(%2.2f), ErrAll=%2.2f(%2.2f)', mean(myErrorN(1:12)),mean(myErrorStd(1:12)),mean(myErrorN(13:end)),mean(myErrorStd(13:end)),mean(myErrorN),mean(myErrorStd));
 
+
+% Benchmark Performance
+% Excellent: MAE < 3 BPM
+% Good: MAE 3-5 BPM
+% Acceptable: MAE 5-10 BPM
+% Poor: MAE > 10 BPM
+% The TROIKA dataset typically achieves MAE ≈ 5-8 BPM with this algorithm.
+
+%% Bland-Altman Analysis - Compare all HR estimates with ground truth
+% Collect all estimated and ground truth values
+all_BPM0 = [];      % Ground truth
+all_BPM_est = [];   % Viterbi smoothed estimates
+
+for idnb = 1 : allD
+    % Load ground truth
+    if idnb>13
+        load(['Data/True' IDData{idnb}(5:end)]);
+    else
+        load(['Data/' IDData{idnb} '_BPMtrace']);
+    end
+    
+    % Reload the data to get BPM_est_N (you'll need to rerun analysis or save it)
+    % For now, we'll collect the BPM0 values
+    all_BPM0 = [all_BPM0; BPM0(:)];
+end
+
+% Generate Bland-Altman plot
+% Usage: BlandAltman(data1, data2, label, title, groupnames, corrinfo, BAinfo)
+figure('Name','Bland-Altman Analysis');
+
+% Example with simple data (adapt based on your saved estimates)
+% BlandAltman(all_BPM0, all_BPM_est, ...
+%     {'Ground Truth', 'Estimated BPM', 'BPM'}, ...  % labels and units
+%     'HR Estimation vs Ground Truth', ...              % title
+%     {}, ...                                            % group names
+%     {'eq'; 'r2'; 'n'}, ...                            % correlation info: equation, r-squared, n
+%     {'RPC(%)'; 'CV'});                                % BA info: RPC and CV
+
+% For better results, modify your main script to save BPM_est_N values
+% and collect them similar to BPM0 above

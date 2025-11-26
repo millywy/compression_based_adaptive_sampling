@@ -385,7 +385,7 @@ end
 text(a(2),a(4),BAtext,'interpreter','tex','HorizontalAlignment','right','VerticalAlignment','top');
 
 if ~isempty(tit)
-	h = suptitle(tit);
+	h = subtitle(tit);
 	set(h,'interpreter','tex');
 end
 
