@@ -1,0 +1,31 @@
+# Data folders
+Data/
+hpi-dhc TROIKA main datasets-IEEE_SPC_2015/
+RESULTS/
+Results/
+original_results/
+
+# MATLAB generated files
+*.asv
+*.m~
+*.fig
+*.mat
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Temporary files
+*.tmp
+*.swp
+*.swo
+*~
+
+# Archives
+*.zip
+*.tar
+*.gz

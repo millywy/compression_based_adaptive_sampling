@@ -181,6 +181,10 @@ for idnb = 1 : allD
                
         PPG_ave_FFT_FIN(i,:) = W1_PPG_ave_FFT_Clean(i,:) +  W21_PPG_ave_FFT_Clean(i,:);
         
+        % Calculate initial BPM estimate (find peak in spectrum)
+        [~, peak_idx] = max(PPG_ave_FFT_FIN(i,:));
+        BPM_est(i) = FreqRangePPG(i, peak_idx) * 60;  % convert to BPM
+        
     end
     
     % comparison with the ground truth
@@ -194,8 +198,36 @@ for idnb = 1 : allD
      trans_full = ((moving(trans_full',4))'); %figure; imagesc(FreqRange(end:-1:1)*60,FreqRange(end:-1:1)*60,log(trans_full)); set(gca,'YDir','normal');
      em = PPG_ave_FFT_FIN(:,:)';
     
-    %figure; imagesc(1:size(em,2),FreqRange*60,em); set(gca,'YDir','normal'); hold on; plot(BPM0,'w-'); plot(BPM_est,'o')
-    [aaa,bbb] = viterbi_path2(trans_full,em);% figure; imagesc(1:size(em,2),FreqRange*60,em); set(gca,'YDir','normal'); hold on; plot(moving(FreqRange(aaa)*60,4),'o-black');
+    
+    %Figure 1: Initial BPM Estimates
+    figure; 
+    imagesc(1:size(em,2),FreqRange*60,em); 
+    set(gca,'YDir','normal'); 
+    hold on; 
+    plot(BPM0,'w-','LineWidth',2); 
+    plot(BPM_est,'o','Color','cyan','MarkerSize',6);
+    xlabel('Time Window Index (2s steps)','FontSize',11);
+    ylabel('Heart Rate (BPM)','FontSize',11);
+    title(sprintf('Spectrogram with Initial Estimates - %s',IDData{idnb}),'FontSize',12,'FontWeight','bold');
+    legend('Ground Truth','Initial Estimates','Location','northeast');
+    %colorbar; colormap('jet');
+    
+    % Figure 2: Viterbi Smoothed Path
+    [aaa,bbb] = viterbi_path2(trans_full,em); 
+    figure; 
+    imagesc(1:size(em,2),FreqRange*60,em); 
+    set(gca,'YDir','normal'); 
+    hold on; 
+    plot(BPM0,'w-','LineWidth',2); 
+    plot(moving(FreqRange(aaa)*60,4),'o-','Color','magenta','MarkerSize',6);
+    xlabel('Time Window Index (2s steps)','FontSize',11);
+    ylabel('Heart Rate (BPM)','FontSize',11);
+    title(sprintf('Viterbi Smoothed Path - %s',IDData{idnb}),'FontSize',12,'FontWeight','bold');
+    legend('Ground Truth','Viterbi Smoothed Estimates','Location','northeast');
+    %colorbar; colormap('jet');
+
+    % figure; imagesc(1:size(em,2),FreqRange*60,em); set(gca,'YDir','normal'); hold on; plot(BPM0,'w-'); plot(BPM_est,'o')
+    % [aaa,bbb] = viterbi_path2(trans_full,em); figure; imagesc(1:size(em,2),FreqRange*60,em); set(gca,'YDir','normal'); hold on; plot(moving(FreqRange(aaa)*60,4),'o-black');
     
     for xxx = 1:size(PPG_ave_FFT_FIN,1),
        BPM_est_N(xxx) = 60*FreqRangePPG(xxx,aaa(xxx)); % viterbi
