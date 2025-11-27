@@ -18,8 +18,8 @@ step_sec = 2;
 % Entropy thresholds / hysteresis
 Th_high = 3.8;
 Th_low  = 3.2;
-dH_up   = 0.25;
-dH_dn   = 0.15;
+dH_up   = 0.3;
+dH_dn   = 0.1;
 nbits_entropy = 4;            % quantization for entropy proxy
 hi_hold_init = 3;             % min windows to stay high after switching up
 
@@ -97,18 +97,20 @@ for idnb = 1:numel(IDData)
         PPG_ave = 0.5 * (curData(1,:) - mean(curData(1,:))) / (std(curData(1,:))+eps) + ...
                   0.5 * (curData(2,:) - mean(curData(2,:))) / (std(curData(2,:))+eps);
         ACCmag = sqrt(curData(3,:).^2 + curData(4,:).^2 + curData(5,:).^2);
-        Hppg(i) = entropy_proxy(PPG_ave, nbits_entropy);
-        Hacc(i) = entropy_proxy(ACCmag, nbits_entropy);
+        Hppg(i) = entropy_proxy_context(PPG_ave, nbits_entropy);
+        Hacc(i) = entropy_proxy_context(ACCmag, nbits_entropy);
         if i==1, dHacc(i) = 0; else, dHacc(i) = Hacc(i) - Hacc(i-1); end
         FsUsed(i) = fs_cur;
 
         % Log line
-        fprintf('rec %02d win %03d fs=%4.1fHz Hppg=%.3f Hacc=%.3f dHacc=%.3f\n', ...
-            idnb, i, fs_cur, Hppg(i), Hacc(i), dHacc(i));
+        %fprintf('rec %02d win %03d fs=%4.1fHz Hppg=%.3f Hacc=%.3f dHacc=%.3f\n', ...
+            %idnb, i, fs_cur, Hppg(i), Hacc(i), dHacc(i));
 
         % Controller for next window
+        % Go UP (higher fs) if (entropy is high) OR (entropy jumped a lot).
+        % Go DOWN (lower fs) only if (entropy is low) AND (entropy is stable for a few windows).
         go_up = (Hacc(i) > Th_high) || (dHacc(i) > dH_up);
-        go_down = (Hacc(i) < Th_low) && (abs(dHacc(i)) < dH_dn) && (hi_hold==0);
+        go_down = (Hacc(i) < Th_low) && ((abs(dHacc(i)) < dH_dn) && (hi_hold==0));
 
         if go_up
             fs_cur = fs_hi;
@@ -140,6 +142,20 @@ for idnb = 1:numel(IDData)
     logRec(idnb).dHacc = dHacc;
     logRec(idnb).BPM_est = BPM_est(1:frames);
     logRec(idnb).BPM0 = BPM0(1:frames);
+
+    % Entropy summary stats
+    stats.Hppg.median = median(Hppg);
+    stats.Hppg.p25 = prctile(Hppg,25);
+    stats.Hppg.p75 = prctile(Hppg,75);
+    stats.Hppg.max = max(Hppg);
+    stats.Hacc.median = median(Hacc);
+    stats.Hacc.p25 = prctile(Hacc,25);
+    stats.Hacc.p75 = prctile(Hacc,75);
+    stats.Hacc.max = max(Hacc);
+    logRec(idnb).entropyStats = stats;
+    fprintf('Rec %02d Hppg: median=%.3f p25=%.3f p75=%.3f max=%.3f | Hacc: median=%.3f p25=%.3f p75=%.3f max=%.3f\n', ...
+        idnb, stats.Hppg.median, stats.Hppg.p25, stats.Hppg.p75, stats.Hppg.max, ...
+        stats.Hacc.median, stats.Hacc.p25, stats.Hacc.p75, stats.Hacc.max);
 end
 
 %% Aggregate metrics
@@ -174,21 +190,8 @@ fprintf('Mode usage: high=%.1f%% low=%.1f%%\n', pct_hi, pct_lo);
 
 save('adaptive_entropy_logs.mat', 'logRec', 'myError', 'MAE_all', 'MAE_train', 'MAE_test');
 
-% %% Plots: Hacc and FsUsed over time for all recordings (stacked)
-% nRec = numel(logRec);
-% figure;
-% for rr = 1:nRec
-%     win_count = numel(logRec(rr).Hacc);
-%     t_sec = (0:win_count-1) * step_sec; % window start times
-%     subplot(ceil(nRec/2), 2, rr);
-%     yyaxis left; plot(t_sec, logRec(rr).Hacc, '-'); ylabel('Hacc');
-%     yyaxis right; stairs(t_sec, logRec(rr).FsUsed, '-'); ylabel('Fs (Hz)');
-%     xlabel('Time (s)'); title(logRec(rr).ID, 'Interpreter','none');
-%     grid on;
-% end
-
 %% Selected recordings for comparison
-selRecs = [1 2 3 4 5 6 9];
+selRecs = [2 4 6 9];
 for idx = 1:numel(selRecs)
     r = selRecs(idx);
     if r <= numel(logRec) && ~isempty(logRec(r).BPM0)
@@ -348,6 +351,8 @@ end
 
 
 %% compressors choices for entropy 
+
+%% Entropy proxy via delta symbols and histogram
 function H = entropy_proxy(x, nbits)
 x = (x - mean(x)) / (std(x) + eps);
 x = max(min(x, 3), -3);
@@ -362,4 +367,60 @@ dq = diff(q);
 p = counts / sum(counts);
 p = p(p>0);
 H = -sum(p .* log2(p));
+end
+
+
+function H = entropy_proxy_context(x, nbits)
+%ENTROPY_PROXY_CONTEXT Entropy estimator via context modeling (order-1) + ideal arithmetic length.
+%   H = entropy_proxy_context(x, nbits)
+%   - x: 1D signal
+%   - nbits: number of quantization bits
+%   Returns: estimated bits per delta-symbol (lower = more predictable/compressible)
+
+    x = x(:)';
+    if numel(x) < 4
+        H = 0;
+        return;
+    end
+
+    % 1) Normalize + clip (robust-ish)
+    x = (x - mean(x)) / (std(x) + eps);
+    x = max(min(x, 3), -3);
+
+    % 2) Uniform quantization to L levels
+    L = 2^nbits;
+    % map [-3,3] -> [0, L-1]
+    q = round((x + 3) * (L-1) / 6);
+    q = min(max(q, 0), L-1);
+
+    % 3) Delta symbols (centered), then shift to nonnegative alphabet
+    d = diff(q);                       % range approx [-(L-1), +(L-1)]
+    S = 2*(L-1) + 1;                   % alphabet size
+    sym = d + (L-1) + 1;               % -> [1..S]
+
+    % 4) Order-1 context model: P(sym_t | sym_{t-1})
+    % We'll compute the ideal arithmetic codelength: sum -log2 P
+    alpha = 1;                         % Laplace smoothing
+    counts = zeros(S, S);              % counts(prev, curr)
+
+    % prime with first symbol as "prev"
+    prev = sym(1);
+
+    bits = 0;
+    for t = 2:numel(sym)
+        curr = sym(t);
+
+        row = counts(prev, :);
+        denom = sum(row) + alpha*S;
+        numer = row(curr) + alpha;
+        p = numer / denom;
+
+        bits = bits - log2(p);
+
+        % update model
+        counts(prev, curr) = counts(prev, curr) + 1;
+        prev = curr;
+    end
+
+    H = bits / (numel(sym)-1);         % bits per symbol (delta)
 end
