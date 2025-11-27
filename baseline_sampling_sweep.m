@@ -1,19 +1,17 @@
 % baseline_sampling_sweep.m
-% Sweep fixed sampling rates for the WFPV (Wiener Filter + Phase Vocoder) TBME 2017 pipeline.
-% Uses the existing logic from PPG_WFPV_TBME2017, but runs the full pipeline
-% at multiple uniform sampling frequencies without modifying the original script.
+% Sweep ADC sampling rates while keeping the internal WFPV pipeline fixed at 25 Hz
+% (matching PPG_WFPV_TBME2017: filter at ADC rate -> downsample to 25 Hz -> FFT/Wiener/phase vocoder/peak tracking).
 
 clear;  % close all;
 
 %% Configuration
 fs0 = 125;  % original sampling rate of the dataset
-fs_list = [125 100 50 25 20 15 12.5 10];
-FFTres = 1024;
-FFTres_base = 1024;  % tuned at 25 Hz
-fs_base = 25;
+fs_list = [125 100 50 25 12.5 6.25 3.125];
+fs_proc = 25;           % fixed internal rate for WFPV
+FFTres = 1024;          % FFT length at 25 Hz (original)
 WFlength = 15;          % Wiener averaging length (frames)
-CutoffFreqHzBP = [0.4 4];  % bandpass for PPG/ACC filtering (Hz)
-CutoffFreqHzSearch = [1 3]; % search band for HR peaks (Hz, 60–180 BPM)
+CutoffFreqHzBP = [0.4 4];   % bandpass for PPG/ACC filtering (Hz) at ADC rate
+CutoffFreqHzSearch = [1 3]; % search band for HR peaks (Hz, 60–180 BPM) at 25 Hz
 
 IDData = {'DATA_01_TYPE01','DATA_02_TYPE02','DATA_03_TYPE02','DATA_04_TYPE02',...
     'DATA_05_TYPE02','DATA_06_TYPE02','DATA_07_TYPE02','DATA_08_TYPE02','DATA_09_TYPE02',...
@@ -25,8 +23,8 @@ IDData = {'DATA_01_TYPE01','DATA_02_TYPE02','DATA_03_TYPE02','DATA_04_TYPE02',..
 %% Sweep over sampling rates
 results = struct('fs', [], 'MAE_all', [], 'MAE_train', [], 'MAE_test', []);
 for k = 1:numel(fs_list)
-    fs = fs_list(k);
-    fprintf('\n=== fs_target = %.2f Hz ===\n', fs);
+    fs_adc = fs_list(k);
+    fprintf('\n=== fs_target (ADC) = %.2f Hz ===\n', fs_adc);
     myError = nan(1, numel(IDData));
 
     for idnb = 1:numel(IDData)
@@ -38,11 +36,13 @@ for k = 1:numel(fs_list)
             ch = [2 3 4 5 6];
         end
 
-        % Resample to target rate with anti-aliasing
-        sig_res = resample_to_fs(sig(ch, :), fs0, fs);
+        % Resample to ADC target, bandpass at ADC rate, then resample to fixed 25 Hz for processing
+        sig_adc = resample_to_fs(sig(ch, :), fs0, fs_adc);
+        sig_filt = bp_filter_at_fs(sig_adc, fs_adc, CutoffFreqHzBP);
+        sig_proc = resample_to_fs(sig_filt, fs_adc, fs_proc);
 
-        % Run WFPV pipeline at this fs
-        BPM_est = run_wfpv_record(sig_res, fs, fs_base, FFTres_base, WFlength, CutoffFreqHzBP, CutoffFreqHzSearch, idnb);
+        % Run WFPV pipeline at fixed fs_proc (25 Hz), algorithm unchanged
+        BPM_est = run_wfpv_record(sig_proc, fs_proc, FFTres, WFlength, CutoffFreqHzSearch, idnb);
 
         % Load ground truth BPM trace
         if idnb > 13
@@ -55,7 +55,7 @@ for k = 1:numel(fs_list)
         myError(idnb) = mean(abs(BPM0(1:frames) - BPM_est(1:frames)'));
     end
 
-    results(k).fs = fs;
+    results(k).fs = fs_adc;
     results(k).MAE_all = mean(myError, 'omitnan');
     results(k).MAE_train = mean(myError(1:12), 'omitnan');
     results(k).MAE_test = mean(myError(13:end), 'omitnan');
@@ -69,8 +69,19 @@ figure;
 plot([results.fs], [results.MAE_all], '-o', 'LineWidth', 1.25);
 xlabel('Sampling frequency (Hz)');
 ylabel('MAE (BPM)');
-title('WFPV MAE vs sampling frequency');
+title('WFPV MAE vs sampling frequency (25 Hz internal)');
 grid on;
+
+%% Helper: bandpass filter at ADC rate (pre-resample)
+function sig_filt = bp_filter_at_fs(sig, fs, bpHz)
+    % Safeguard high cutoff relative to Nyquist for low fs
+    bp = [bpHz(1), min(bpHz(2), 0.99*(fs/2))];
+    [b, a] = butter(4, bp/(fs/2), 'bandpass');
+    sig_filt = zeros(size(sig));
+    for c = 1:size(sig,1)
+        sig_filt(c,:) = filter(b, a, sig(c,:));
+    end
+end
 
 %% Helper: resample with anti-aliasing
 function sig_res = resample_to_fs(sig, fs_in, fs_out)
@@ -80,21 +91,24 @@ function sig_res = resample_to_fs(sig, fs_in, fs_out)
         return;
     end
 
-    r = fs_out / fs_in;
+    ratio = fs_out / fs_in;
+    [p,q] = rat(ratio,1e-12);  % integer resample factors
     [nCh, nSamp] = size(sig);
-    expected_len = round(nSamp * r);
+    expected_len = round(nSamp * p / q);
 
-    % Integer decimation when possible
-    if fs_out < fs_in && abs(fs_in / fs_out - round(fs_in / fs_out)) < 1e-6
+    % Integer decimation when possible (use downsample to mirror original code path)
+    if fs_out < fs_in && abs(fs_in / fs_out - round(fs_in / fs_out)) < 1e-9
         decim = round(fs_in / fs_out);
-        sig_res = zeros(nCh, ceil(nSamp / decim));
+        int_len = ceil(nSamp / decim);
+        sig_res = zeros(nCh, int_len);
         for c = 1:nCh
-            sig_res(c, :) = decimate(sig(c, :), decim);
+            tmp = downsample(sig(c, :), decim);
+            sig_res(c, 1:length(tmp)) = tmp;
         end
     else
         sig_res = zeros(nCh, expected_len);
         for c = 1:nCh
-            resampled = resample(sig(c, :), fs_out, fs_in);
+            resampled = resample(sig(c, :), p, q);
             % Trim or pad to expected length
             if length(resampled) > expected_len
                 sig_res(c, :) = resampled(1:expected_len);
@@ -105,10 +119,9 @@ function sig_res = resample_to_fs(sig, fs_in, fs_out)
     end
 end
 
-%% Helper: WFPV pipeline for one recording at a given fs
-function BPM_est = run_wfpv_record(sig, fs, fs_base, FFTres_base, WFlength, bpHz, searchHz, idnb)
-    FFTres = 2^nextpow2(round(FFTres_base * (fs/fs_base)));
-    [b, a] = butter(4, bpHz / (fs / 2), 'bandpass');
+%% Helper: WFPV pipeline for one recording at fixed 25 Hz
+function BPM_est = run_wfpv_record(sig, fs, FFTres, WFlength, searchHz, idnb)
+    % Assumes input sig is already bandpassed and resampled to fs (25 Hz).
     window = round(8 * fs);
     step = round(2 * fs);
 
@@ -126,11 +139,11 @@ function BPM_est = run_wfpv_record(sig, fs, fs_base, FFTres_base, WFlength, bpHz
         curSegment = (i - 1) * step + 1 : (i - 1) * step + window;
         curData = sig(:, curSegment);
 
-        PPG1 = filter(b, a, curData(1, :));
-        PPG2 = filter(b, a, curData(2, :));
-        ACC_X = filter(b, a, curData(3, :));
-        ACC_Y = filter(b, a, curData(4, :));
-        ACC_Z = filter(b, a, curData(5, :));
+        PPG1 = curData(1, :);
+        PPG2 = curData(2, :);
+        ACC_X = curData(3, :);
+        ACC_Y = curData(4, :);
+        ACC_Z = curData(5, :);
         PPG_ave = 0.5 * (PPG1 - mean(PPG1)) / (std(PPG1) + eps) + 0.5 * (PPG2 - mean(PPG2)) / (std(PPG2) + eps);
 
         % Periodogram
