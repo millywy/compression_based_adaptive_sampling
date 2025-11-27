@@ -26,6 +26,8 @@ for k = 1:numel(fs_list)
     fs_adc = fs_list(k);
     fprintf('\n=== fs_target (ADC) = %.2f Hz ===\n', fs_adc);
     myError = nan(1, numel(IDData));
+    fullBPM0 = [];
+    fullBPM = [];
 
     for idnb = 1:numel(IDData)
         % Load data
@@ -53,6 +55,16 @@ for k = 1:numel(fs_list)
 
         frames = min(length(BPM_est), length(BPM0));
         myError(idnb) = mean(abs(BPM0(1:frames) - BPM_est(1:frames)'));
+        fullBPM0 = [fullBPM0, BPM0(1:frames)'];
+        fullBPM  = [fullBPM, BPM_est(1:frames)];
+
+        % Plot selected recordings 9 and 14 for comparison
+        if idnb==9 || idnb==14
+            figure;
+            plot(BPM0,'ro'); hold on; plot(BPM_est(1:frames),'o','Color','blue');
+            title(sprintf('Recording %d at fs=%.2f Hz', idnb, fs_adc));
+            xlabel('Time (frames)'); ylabel('HR (BPM)'); legend({'Ground truth','Estimates'});
+        end
     end
 
     results(k).fs = fs_adc;
@@ -62,6 +74,12 @@ for k = 1:numel(fs_list)
 
     fprintf('MAE all: %.2f | train: %.2f | test: %.2f\n', ...
         results(k).MAE_all, results(k).MAE_train, results(k).MAE_test);
+
+    fprintf('Generating Bland-Altman plot for fs=%.2f...\n', fs_adc);
+    [~, figBA] = BlandAltman(fullBPM0', fullBPM', {'Ground truth HR','Estimated HR'});
+    if exist('sgtitle','file') && ~isempty(figBA), figure(figBA); sgtitle(sprintf('Bland-Altman (fs=%.2f Hz)', fs_adc)); end
+    tmp = corrcoef(fullBPM0, fullBPM);
+    fprintf('Overall correlation coefficient (fs=%.2f): %.4f\n', fs_adc, tmp(1,2));
 end
 
 %% Plot MAE vs sampling frequency

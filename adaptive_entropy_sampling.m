@@ -138,14 +138,33 @@ for idnb = 1:numel(IDData)
     logRec(idnb).Hppg = Hppg;
     logRec(idnb).Hacc = Hacc;
     logRec(idnb).dHacc = dHacc;
-    logRec(idnb).BPM_est = BPM_est;
+    logRec(idnb).BPM_est = BPM_est(1:frames);
+    logRec(idnb).BPM0 = BPM0(1:frames);
 end
 
 %% Aggregate metrics
 MAE_all = mean(myError, 'omitnan');
 MAE_train = mean(myError(1:12), 'omitnan');
 MAE_test = mean(myError(13:end), 'omitnan');
-fprintf('\nMAE all: %.2f | train: %.2f | test: %.2f\n', MAE_all, MAE_train, MAE_test);
+fprintf('\n=== Adaptive Entropy Sampling Results ===\n');
+fprintf('Err12=%2.2f, Err11=%2.2f, ErrAll=%2.2f\n', MAE_train, MAE_test, MAE_all);
+fprintf('Individual recording errors (BPM):\n');
+fprintf(' ');
+fprintf('%4.2f ', myError);
+fprintf('\n');
+
+% Bland-Altman and correlation
+fullBPM0 = [];
+fullBPM = [];
+for rr = 1:numel(logRec)
+    fullBPM0 = [fullBPM0, logRec(rr).BPM0(:)'];
+    fullBPM  = [fullBPM,  logRec(rr).BPM_est(:)'];
+end
+fprintf('Generating Bland-Altman plot...\n');
+[~, figBA] = BlandAltman(fullBPM0', fullBPM', {'Ground truth HR','Estimated HR'});
+if exist('sgtitle','file') && ~isempty(figBA), figure(figBA); sgtitle('Bland-Altman (Adaptive Entropy Sampling)'); end
+tmp = corrcoef(fullBPM0, fullBPM);
+fprintf('Overall correlation coefficient: %.4f\n', tmp(1,2));
 
 % Mode usage stats
 all_fs_used = [logRec.FsUsed];
@@ -155,17 +174,42 @@ fprintf('Mode usage: high=%.1f%% low=%.1f%%\n', pct_hi, pct_lo);
 
 save('adaptive_entropy_logs.mat', 'logRec', 'myError', 'MAE_all', 'MAE_train', 'MAE_test');
 
-%% Plots: Hacc and FsUsed over time for all recordings (stacked)
-nRec = numel(logRec);
-figure;
-for rr = 1:nRec
-    win_count = numel(logRec(rr).Hacc);
-    t_sec = (0:win_count-1) * step_sec; % window start times
-    subplot(ceil(nRec/2), 2, rr);
-    yyaxis left; plot(t_sec, logRec(rr).Hacc, '-'); ylabel('Hacc');
-    yyaxis right; stairs(t_sec, logRec(rr).FsUsed, '-'); ylabel('Fs (Hz)');
-    xlabel('Time (s)'); title(logRec(rr).ID, 'Interpreter','none');
-    grid on;
+% %% Plots: Hacc and FsUsed over time for all recordings (stacked)
+% nRec = numel(logRec);
+% figure;
+% for rr = 1:nRec
+%     win_count = numel(logRec(rr).Hacc);
+%     t_sec = (0:win_count-1) * step_sec; % window start times
+%     subplot(ceil(nRec/2), 2, rr);
+%     yyaxis left; plot(t_sec, logRec(rr).Hacc, '-'); ylabel('Hacc');
+%     yyaxis right; stairs(t_sec, logRec(rr).FsUsed, '-'); ylabel('Fs (Hz)');
+%     xlabel('Time (s)'); title(logRec(rr).ID, 'Interpreter','none');
+%     grid on;
+% end
+
+%% Selected recordings for comparison
+selRecs = [1 2 3 4 5 6 9];
+for idx = 1:numel(selRecs)
+    r = selRecs(idx);
+    if r <= numel(logRec) && ~isempty(logRec(r).BPM0)
+        win_count = numel(logRec(r).Hacc);
+        t_sec = (0:win_count-1) * step_sec; % window start times
+        frames = 1:win_count;
+
+        % HR comparison
+        figure;
+        plot(logRec(r).BPM0,'ro'); hold on; plot(logRec(r).BPM_est,'o','Color','blue');
+        title(sprintf('Recording %d (Adaptive Entropy Sampling)', r));
+        xlabel('Time (frames)'); ylabel('HR (BPM)'); legend({'Ground truth','Estimates'});
+        grid on;
+
+        % Hacc and FsUsed over time (time axis in seconds, optional frame ticks on top)
+        figure;
+        yyaxis left; plot(frames, logRec(r).Hacc, '-'); ylabel('Hacc (bits)');
+        yyaxis right; stairs(frames, logRec(r).FsUsed, '-'); ylabel('FsUsed (Hz)');
+        xlabel('Time (frames)'); title(sprintf('Entropy & FsUsed - Recording %d', r));
+        grid on;
+    end
 end
 
 %% Helpers
