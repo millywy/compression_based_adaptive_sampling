@@ -187,17 +187,17 @@ for idnb = 1 : allD
     trans_full = ((moving(trans_full',4))');
     em = PPG_ave_FFT_FIN(:,:)';
     
-    % %Figure 1: Initial BPM Estimates
-    % figure; 
-    % imagesc(1:size(em,2),FreqRange*60,em); 
-    % set(gca,'YDir','normal'); 
-    % hold on; 
-    % plot(BPM0,'w-','LineWidth',2); 
-    % plot(BPM_est,'o','Color','cyan','MarkerSize',6);
-    % xlabel('Time Window Index (2s steps)','FontSize',11);
-    % ylabel('Heart Rate (BPM)','FontSize',11);
-    % title(sprintf('Spectrogram with Initial Estimates - %s',IDData{idnb}),'FontSize',12,'FontWeight','bold');
-    % legend('Ground Truth','Initial Estimates','Location','northeast');
+    %Figure 1: Initial BPM Estimates
+    figure; 
+    imagesc(1:size(em,2),FreqRange*60,em); 
+    set(gca,'YDir','normal'); 
+    hold on; 
+    plot(BPM0,'w-','LineWidth',2); 
+    plot(BPM_est,'o','Color','cyan','MarkerSize',6);
+    xlabel('Time Window Index (2s steps)','FontSize',11);
+    ylabel('Heart Rate (BPM)','FontSize',11);
+    title(sprintf('Spectrogram with Initial Estimates - %s',IDData{idnb}),'FontSize',12,'FontWeight','bold');
+    legend('Ground Truth','Initial Estimates','Location','northeast');
     
     % Figure 2: Viterbi Smoothed Path
     [aaa,bbb] = viterbi_path2(trans_full,em); 

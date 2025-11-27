@@ -113,6 +113,10 @@ for idnb = 1 : allD
         
         
         % Wiener filtering PPG-ACC, two types
+        % WF1 = 1 - (ACC_norm ./ PPG_hist_norm);
+        % WF2 = PPG_hist_norm ./ (PPG_hist_norm + ACC_norm);
+        % PPG_ave_FFT_FIN = W1_clean + W2_clean;
+        %
         % W1 filter = clean_signal/(clean_signal+noise) = (all_signal-noise)/all_signal,
         % where all_signal = time_average(ppg_signal), noise = time_average(accelerometer)
         %
@@ -226,23 +230,31 @@ for idnb = 1 : allD
     myError(idnb) = mean(abs(BPM0 - BPM_est(1:1:end)'));
     myRelError(idnb) = mean(abs(BPM0 - BPM_est(1:1:end)')./BPM0);
     myErrorStd(idnb) = std(abs(BPM0 - BPM_est(1:1:end)'));
-    save(['Result_' IDData{idnb} '_DATA_WFPV'],'BPM_est', 'BPM0'); 
+    %save(['Result_' IDData{idnb} '_DATA_WFPV'],'BPM_est', 'BPM0'); 
     
          
     if idnb > 0 fullBPM=[fullBPM BPM_est]; fullBPM0=[fullBPM0 BPM0']; end
-    % plot best and worst performing patients
-    %if idnb==14,           figure; plot(BPM0,'ro');hold on; plot(BPM_est(1:1:end),'o'); title(['Recording ' num2str(idnb)]); xlabel('Time (in frames)'); ylabel('HR'); legend({'Ground truth', 'Estimates'}); end;
-    %if idnb==9,           figure; plot(BPM0,'ro');hold on; plot(BPM_est(1:1:end),'o'); title(['Recording ' num2str(idnb)]); xlabel('Time (in frames)'); ylabel('HR'); legend({'Ground truth', 'Estimates'}); end;
+    %plot best and worst performing patients
+    if idnb==14,           figure; plot(BPM0,'ro');hold on; plot(BPM_est(1:1:end),'o', 'Color','blue'); title(['Recording ' num2str(idnb)]); xlabel('Time (in frames)'); ylabel('HR'); legend({'Ground truth', 'Estimates'}); end;
+    if idnb==9,           figure; plot(BPM0,'ro');hold on; plot(BPM_est(1:1:end),'o', 'Color','blue'); title(['Recording ' num2str(idnb)]); xlabel('Time (in frames)'); ylabel('HR'); legend({'Ground truth', 'Estimates'}); end;
     
 end
-fprintf('Err12=%2.2f(%2.2f), Err11=%2.2f(%2.2f), ErrAll=%2.2f(%2.2f)', mean(myError(1:12)),mean(myErrorStd(1:12)),mean(myError(13:end)),mean(myErrorStd(13:end)),mean(myError),mean(myErrorStd));
+
+fprintf('\n=== PPG_WFPV_TBME2017 Results ===\n');
+fprintf('Err12=%2.2f(%2.2f), Err11=%2.2f(%2.2f), ErrAll=%2.2f(%2.2f)\n', mean(myError(1:12)),mean(myErrorStd(1:12)),mean(myError(13:end)),mean(myErrorStd(13:end)),mean(myError),mean(myErrorStd));
+
+fprintf('Individual recording errors (BPM):');
 for s=1:allD
-    fprintf(' %2.2f', myError(s));
+    if mod(s,5)==1, fprintf('\n  '); end
+    fprintf('%2.2f ', myError(s));
 end
+fprintf('\n\n');
+
 % other plots
-%BlandAltman(fullBPM0',fullBPM',{'Ground truth HR','Estimated HR'})
-%tmp = corrcoef(fullBPM0,fullBPM); % correlation coefficient, offdiagonal
-%hist(fullBPM0,20)
+fprintf('Generating Bland-Altman plot...\n');
+BlandAltman(fullBPM0',fullBPM',{'Ground truth HR','Estimated HR'})
+tmp = corrcoef(fullBPM0,fullBPM); % correlation coefficient, offdiagonal
+fprintf('Overall correlation coefficient: %.4f\n', tmp(1,2));
 
 
 
