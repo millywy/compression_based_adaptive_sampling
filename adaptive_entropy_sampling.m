@@ -54,6 +54,7 @@ for idnb = 1:numel(IDData)
     FsUsed  = zeros(1, windowNb);
     Hppg    = zeros(1, windowNb);
     Hacc    = zeros(1, windowNb);
+    dHppg   = zeros(1, windowNb);
     dHacc   = zeros(1, windowNb);
     Th_high_log = zeros(1, windowNb);
     Th_low_log  = zeros(1, windowNb);
@@ -101,19 +102,21 @@ for idnb = 1:numel(IDData)
         ACCmag = sqrt(curData(3,:).^2 + curData(4,:).^2 + curData(5,:).^2);
         Hppg(i) = entropy_proxy_context(PPG_ave, nbits_entropy);
         Hacc(i) = entropy_proxy_context(ACCmag, nbits_entropy);
+        % Use PPG entropy for control
+        if i==1, dHppg(i) = 0; else, dHppg(i) = Hppg(i) - Hppg(i-1); end
         if i==1, dHacc(i) = 0; else, dHacc(i) = Hacc(i) - Hacc(i-1); end
         FsUsed(i) = fs_cur;
 
         % Adaptive thresholds from recent history (robust quartiles + MAD)
-        Hacc_hist = Hacc(max(1,i-W_hist+1):i);
-        medH = median(Hacc_hist);
-        p25H = prctile(Hacc_hist,25);
-        p75H = prctile(Hacc_hist,75);
-        Th_low = p25H;  % drop only if motion is in lower quartile of recent history
-        Th_high = p75H; % raise if motion is in upper quartile of recent history
+        Hppg_hist = Hppg(max(1,i-W_hist+1):i);
+        medH = median(Hppg_hist);
+        p25H = prctile(Hppg_hist,25);
+        p75H = prctile(Hppg_hist,75);
+        Th_low = p25H;  % drop only if PPG entropy is in lower quartile of recent history
+        Th_high = p75H; % raise if PPG entropy is in upper quartile of recent history
 
-        dH_hist = dHacc(max(2,i-W_hist+1):i); % skip first zero
-        sigma_d = 1.4826 * mad(dH_hist,1) + eps; % robust MAD scale for jumps
+        dH_hist = dHppg(max(2,i-W_hist+1):i); % skip first zero
+        sigma_d = 1.4826 * mad(dH_hist,1) + eps; % robust MAD scale for jumps (PPG entropy)
         sigma_floor = 1e-4;
         sigma_d = max(sigma_d, sigma_floor);
         dH_up = 3.0 * sigma_d; % respond quickly to large motion change
@@ -130,14 +133,14 @@ for idnb = 1:numel(IDData)
         dH_dn_log(i)   = dH_dn;
 
         % Log line per window (online; no future lookahead)
-        % fprintf('rec %02d win %03d fs=%4.1f Hacc=%.3f dH=%.3f ThL=%.3f ThH=%.3f dHdn=%.3f dHup=%.3f\n', ...
-        %     idnb, i, fs_cur, Hacc(i), dHacc(i), Th_low, Th_high, dH_dn, dH_up);
+        % fprintf('rec %02d win %03d fs=%4.1f Hppg=%.3f dH=%.3f ThL=%.3f ThH=%.3f dHdn=%.3f dHup=%.3f\n', ...
+        %     idnb, i, fs_cur, Hppg(i), dHppg(i), Th_low, Th_high, dH_dn, dH_up);
 
         % Controller for next window (uses adaptive thresholds)
-        % Go UP (higher fs) if (entropy is high) OR (entropy jumped a lot).
-        % Go DOWN (lower fs) only if (entropy is low) AND (entropy is stable for a few windows).
-        go_up = (Hacc(i) > Th_high) || (dHacc(i) > dH_up);
-        go_down = (Hacc(i) < Th_low) && (abs(dHacc(i)) < dH_dn) && (hi_hold==0);
+        % Go UP (higher fs) if (PPG entropy is high) OR (PPG entropy jumped a lot).
+        % Go DOWN (lower fs) only if (PPG entropy is low) AND (PPG entropy is stable for a few windows).
+        go_up = (Hppg(i) > Th_high) || (dHppg(i) > dH_up);
+        go_down = (Hppg(i) < Th_low) && (abs(dHppg(i)) < dH_dn) && (hi_hold==0);
 
         if go_up
             fs_cur = fs_hi;
