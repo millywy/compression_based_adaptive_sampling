@@ -15,11 +15,9 @@ CutoffFreqHzSearch = [1 3];   % HR search band (Hz)
 window_sec = 8;
 step_sec = 2;
 
-% Entropy thresholds / hysteresis
-Th_high = 3.8;
-Th_low  = 3.2;
-dH_up   = 0.3;
-dH_dn   = 0.1;
+% Adaptive entropy thresholds / hysteresis
+W_hist = 30;                  % history length in windows (~60s at 2s hop)
+W_min = 10;                   % warm-up windows before normal adaptation
 nbits_entropy = 4;            % quantization for entropy proxy
 hi_hold_init = 3;             % min windows to stay high after switching up
 
@@ -57,6 +55,10 @@ for idnb = 1:numel(IDData)
     Hppg    = zeros(1, windowNb);
     Hacc    = zeros(1, windowNb);
     dHacc   = zeros(1, windowNb);
+    Th_high_log = zeros(1, windowNb);
+    Th_low_log  = zeros(1, windowNb);
+    dH_up_log   = zeros(1, windowNb);
+    dH_dn_log   = zeros(1, windowNb);
 
     % Mode states (keep WF history per mode)
     state_hi = init_mode_state();
@@ -102,15 +104,40 @@ for idnb = 1:numel(IDData)
         if i==1, dHacc(i) = 0; else, dHacc(i) = Hacc(i) - Hacc(i-1); end
         FsUsed(i) = fs_cur;
 
-        % Log line
-        %fprintf('rec %02d win %03d fs=%4.1fHz Hppg=%.3f Hacc=%.3f dHacc=%.3f\n', ...
-            %idnb, i, fs_cur, Hppg(i), Hacc(i), dHacc(i));
+        % Adaptive thresholds from recent history (robust quartiles + MAD)
+        Hacc_hist = Hacc(max(1,i-W_hist+1):i);
+        medH = median(Hacc_hist);
+        p25H = prctile(Hacc_hist,25);
+        p75H = prctile(Hacc_hist,75);
+        Th_low = p25H;  % drop only if motion is in lower quartile of recent history
+        Th_high = p75H; % raise if motion is in upper quartile of recent history
 
-        % Controller for next window
+        dH_hist = dHacc(max(2,i-W_hist+1):i); % skip first zero
+        sigma_d = 1.4826 * mad(dH_hist,1) + eps; % robust MAD scale for jumps
+        sigma_floor = 1e-4;
+        sigma_d = max(sigma_d, sigma_floor);
+        dH_up = 3.0 * sigma_d; % respond quickly to large motion change
+        dH_dn = 1.0 * sigma_d; % allow downshift only if stable
+
+        if i < W_min
+            % Warm-up: keep thresholds from available prefix but enforce staying high
+            hi_hold = hi_hold_init;
+        end
+
+        Th_high_log(i) = Th_high;
+        Th_low_log(i)  = Th_low;
+        dH_up_log(i)   = dH_up;
+        dH_dn_log(i)   = dH_dn;
+
+        % Log line per window (online; no future lookahead)
+        % fprintf('rec %02d win %03d fs=%4.1f Hacc=%.3f dH=%.3f ThL=%.3f ThH=%.3f dHdn=%.3f dHup=%.3f\n', ...
+        %     idnb, i, fs_cur, Hacc(i), dHacc(i), Th_low, Th_high, dH_dn, dH_up);
+
+        % Controller for next window (uses adaptive thresholds)
         % Go UP (higher fs) if (entropy is high) OR (entropy jumped a lot).
         % Go DOWN (lower fs) only if (entropy is low) AND (entropy is stable for a few windows).
         go_up = (Hacc(i) > Th_high) || (dHacc(i) > dH_up);
-        go_down = (Hacc(i) < Th_low) && ((abs(dHacc(i)) < dH_dn) && (hi_hold==0));
+        go_down = (Hacc(i) < Th_low) && (abs(dHacc(i)) < dH_dn) && (hi_hold==0);
 
         if go_up
             fs_cur = fs_hi;
@@ -142,6 +169,10 @@ for idnb = 1:numel(IDData)
     logRec(idnb).dHacc = dHacc;
     logRec(idnb).BPM_est = BPM_est(1:frames);
     logRec(idnb).BPM0 = BPM0(1:frames);
+    logRec(idnb).Th_high_log = Th_high_log;
+    logRec(idnb).Th_low_log  = Th_low_log;
+    logRec(idnb).dH_up_log   = dH_up_log;
+    logRec(idnb).dH_dn_log   = dH_dn_log;
 
     % Entropy summary stats
     stats.Hppg.median = median(Hppg);
@@ -153,9 +184,9 @@ for idnb = 1:numel(IDData)
     stats.Hacc.p75 = prctile(Hacc,75);
     stats.Hacc.max = max(Hacc);
     logRec(idnb).entropyStats = stats;
-    fprintf('Rec %02d Hppg: median=%.3f p25=%.3f p75=%.3f max=%.3f | Hacc: median=%.3f p25=%.3f p75=%.3f max=%.3f\n', ...
-        idnb, stats.Hppg.median, stats.Hppg.p25, stats.Hppg.p75, stats.Hppg.max, ...
-        stats.Hacc.median, stats.Hacc.p25, stats.Hacc.p75, stats.Hacc.max);
+    %fprintf('Rec %02d Hppg: median=%.3f p25=%.3f p75=%.3f max=%.3f | Hacc: median=%.3f p25=%.3f p75=%.3f max=%.3f\n', ...
+        % idnb, stats.Hppg.median, stats.Hppg.p25, stats.Hppg.p75, stats.Hppg.max, ...
+        % stats.Hacc.median, stats.Hacc.p25, stats.Hacc.p75, stats.Hacc.max);
 end
 
 %% Aggregate metrics
@@ -191,7 +222,7 @@ fprintf('Mode usage: high=%.1f%% low=%.1f%%\n', pct_hi, pct_lo);
 save('adaptive_entropy_logs.mat', 'logRec', 'myError', 'MAE_all', 'MAE_train', 'MAE_test');
 
 %% Selected recordings for comparison
-selRecs = [2 4 6 9];
+selRecs = [6 12 20];
 for idx = 1:numel(selRecs)
     r = selRecs(idx);
     if r <= numel(logRec) && ~isempty(logRec(r).BPM0)
@@ -369,7 +400,7 @@ p = p(p>0);
 H = -sum(p .* log2(p));
 end
 
-
+%% ENTROPY_PROXY_CONTEXT Entropy estimator via context modeling (order-1) + ideal arithmetic length.
 function H = entropy_proxy_context(x, nbits)
 %ENTROPY_PROXY_CONTEXT Entropy estimator via context modeling (order-1) + ideal arithmetic length.
 %   H = entropy_proxy_context(x, nbits)

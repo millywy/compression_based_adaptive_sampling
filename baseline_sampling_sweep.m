@@ -59,7 +59,7 @@ for k = 1:numel(fs_list)
         fullBPM  = [fullBPM, BPM_est(1:frames)];
 
         % Plot selected recordings 9 and 14 for comparison
-        if idnb==9 || idnb==14
+        if idnb==6 || idnb==12 || idnb==13
             figure;
             plot(BPM0,'ro'); hold on; plot(BPM_est(1:frames),'o','Color','blue');
             title(sprintf('Recording %d at fs=%.2f Hz', idnb, fs_adc));
