@@ -6,7 +6,8 @@ clear;  % close all;
 
 %% Configuration
 fs0 = 125;  % original sampling rate of the dataset
-fs_list = [125 100 50 25 12.5 6.25 3.125];
+%fs_list = [125 100 50 25 12.5 6.25 3.125];
+fs_list = [25 6.25 ];
 fs_proc = 25;           % fixed internal rate for WFPV
 FFTres = 1024;          % FFT length at 25 Hz (original)
 WFlength = 15;          % Wiener averaging length (frames)
@@ -59,7 +60,7 @@ for k = 1:numel(fs_list)
         fullBPM  = [fullBPM, BPM_est(1:frames)];
 
         % Plot selected recordings 9 and 14 for comparison
-        if idnb==6 || idnb==12 || idnb==13
+        if idnb==6 || idnb==12 || idnb==20
             figure;
             plot(BPM0,'ro'); hold on; plot(BPM_est(1:frames),'o','Color','blue');
             title(sprintf('Recording %d at fs=%.2f Hz', idnb, fs_adc));

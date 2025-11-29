@@ -8,6 +8,7 @@ clear;  % close all;
 fs0 = 125;
 fs_hi = 25;
 fs_lo = 12.5;
+fs_acc = 25;                 % fixed-rate control stream for ACC
 FFTres = 1024;
 WFlength = 15;                % Wiener averaging length (frames)
 CutoffFreqHzBP = [0.4 4];     % bandpass at 125 Hz before decimation
@@ -15,11 +16,20 @@ CutoffFreqHzSearch = [1 3];   % HR search band (Hz)
 window_sec = 8;
 step_sec = 2;
 
-% Adaptive entropy thresholds / hysteresis
+% Adaptive entropy thresholds / hysteresis (tunable)
 W_hist = 30;                  % history length in windows (~60s at 2s hop)
 W_min = 10;                   % warm-up windows before normal adaptation
 nbits_entropy = 4;            % quantization for entropy proxy
 hi_hold_init = 3;             % min windows to stay high after switching up
+ema_beta = 0.85;              % smoothing for entropy (ACC-based control)
+k_up_lo = 3.0;                % sensitivity when in LOW mode
+k_up_hi = 3.0;                % stricter when in HIGH mode
+k_dn    = 1.0;                % stability requirement for downshift
+N_up_level = 2;               % consecutive level-high windows to go HIGH
+N_up_jump  = 1;               % consecutive jump triggers to go HIGH (burst on sudden change)
+N_down  = 4;                  % consecutive stable windows to go LOW
+cooldown_init = 3;            % block re-up for this many windows after going LOW
+DEBUG_LOG = false;            % set true to print per-window debug
 
 IDData = {'DATA_01_TYPE01','DATA_02_TYPE02','DATA_03_TYPE02','DATA_04_TYPE02',...
     'DATA_05_TYPE02','DATA_06_TYPE02','DATA_07_TYPE02','DATA_08_TYPE02','DATA_09_TYPE02',...
@@ -52,37 +62,46 @@ for idnb = 1:numel(IDData)
 
     BPM_est = zeros(1, windowNb);
     FsUsed  = zeros(1, windowNb);
-    Hppg    = zeros(1, windowNb);
-    Hacc    = zeros(1, windowNb);
-    dHppg   = zeros(1, windowNb);
-    dHacc   = zeros(1, windowNb);
-    Th_high_log = zeros(1, windowNb);
-    Th_low_log  = zeros(1, windowNb);
-    dH_up_log   = zeros(1, windowNb);
-    dH_dn_log   = zeros(1, windowNb);
+    Hacc    = zeros(1, windowNb);      % ACC entropy at fixed 25 Hz
+    Hacc_s  = zeros(1, windowNb);      % smoothed ACC entropy
+    dHacc_raw = zeros(1, windowNb);    % raw ACC entropy diff (jump metric)
+    Th_high_log = zeros(1, windowNb);  % store enter-high gate
+    Th_low_log  = zeros(1, windowNb);  % store exit-low gate
+    dH_up_log   = zeros(1, windowNb);  % jump threshold
+    dH_dn_log   = zeros(1, windowNb);  % stability threshold
 
     % Mode states (keep WF history per mode)
     state_hi = init_mode_state();
     state_lo = init_mode_state();
     fs_cur = fs_hi;   % start high
     hi_hold = 0;
+    state_mode = "LOW";
+    cooldown = 0; up_count_level = 0; up_count_jump = 0; down_count = 0;
+    switches_up = 0; switches_down = 0;
 
     for i = 1:windowNb
         curSegment = (i-1)*step+1 : (i-1)*step+window;
         curDataRaw = sig(ch, curSegment);
 
-        % filter at 125 Hz, then resample to current mode
+        % filter at 125 Hz
         curDataFilt = zeros(size(curDataRaw));
         for c = 1:size(curDataRaw,1)
             curDataFilt(c,:) = filter(b125, a125, curDataRaw(c,:));
         end
+
+        % ACC control stream at fixed 25 Hz
+        acc_decim = round(fs0/fs_acc); % should be 5
+        curAcc25 = curDataFilt(3:5, 1:acc_decim:end);
+        ACCmag25 = sqrt(curAcc25(1,:).^2 + curAcc25(2,:).^2 + curAcc25(3,:).^2);
+
+        % PPG/ACC for WFPV at current mode
         if fs_cur == fs_hi
-            decim = round(fs0/fs_hi);
-            curData = curDataFilt(:, 1:decim:end); % downsample along time (cols)
+            decim = round(fs0/fs_hi); % 5
+            curData = curDataFilt(:, 1:decim:end); % downsample along time (cols) to 25 Hz
             state = state_hi;
         else
-            decim = round(fs0/fs_lo);
-            curData = curDataFilt(:, 1:decim:end); % downsample along time (cols)
+            decim = round(fs0/fs_lo); % 10
+            curData = curDataFilt(:, 1:decim:end); % downsample along time (cols) to 12.5 Hz
             state = state_lo;
         end
 
@@ -96,64 +115,115 @@ for idnb = 1:numel(IDData)
             state_lo = state;
         end
 
-        % Entropy metrics on resampled signals
-        PPG_ave = 0.5 * (curData(1,:) - mean(curData(1,:))) / (std(curData(1,:))+eps) + ...
-                  0.5 * (curData(2,:) - mean(curData(2,:))) / (std(curData(2,:))+eps);
-        ACCmag = sqrt(curData(3,:).^2 + curData(4,:).^2 + curData(5,:).^2);
-        Hppg(i) = entropy_proxy_context(PPG_ave, nbits_entropy);
-        Hacc(i) = entropy_proxy_context(ACCmag, nbits_entropy);
-        % Use PPG entropy for control
-        if i==1, dHppg(i) = 0; else, dHppg(i) = Hppg(i) - Hppg(i-1); end
-        if i==1, dHacc(i) = 0; else, dHacc(i) = Hacc(i) - Hacc(i-1); end
-        FsUsed(i) = fs_cur;
-
-        % Adaptive thresholds from recent history (robust quartiles + MAD)
-        Hppg_hist = Hppg(max(1,i-W_hist+1):i);
-        medH = median(Hppg_hist);
-        p25H = prctile(Hppg_hist,25);
-        p75H = prctile(Hppg_hist,75);
-        Th_low = p25H;  % drop only if PPG entropy is in lower quartile of recent history
-        Th_high = p75H; % raise if PPG entropy is in upper quartile of recent history
-
-        dH_hist = dHppg(max(2,i-W_hist+1):i); % skip first zero
-        sigma_d = 1.4826 * mad(dH_hist,1) + eps; % robust MAD scale for jumps (PPG entropy)
-        sigma_floor = 1e-4;
-        sigma_d = max(sigma_d, sigma_floor);
-        dH_up = 3.0 * sigma_d; % respond quickly to large motion change
-        dH_dn = 1.0 * sigma_d; % allow downshift only if stable
-
-        if i < W_min
-            % Warm-up: keep thresholds from available prefix but enforce staying high
-            hi_hold = hi_hold_init;
+        % Entropy metrics: ACC control stream at fixed 25 Hz
+        Hacc(i) = entropy_proxy_context(ACCmag25, nbits_entropy);
+        if i==1
+            Hacc_s(i) = Hacc(i);
+            dHacc_raw(i) = 0;
+        else
+            Hacc_s(i) = ema_beta * Hacc_s(i-1) + (1-ema_beta) * Hacc(i);
+            dHacc_raw(i) = Hacc(i) - Hacc(i-1); % jump metric (raw)
         end
 
-        Th_high_log(i) = Th_high;
-        Th_low_log(i)  = Th_low;
+        % Adaptive thresholds from recent history (ACC-based)
+        if i < W_min
+            Th_enter = inf; Th_exit = -inf; dH_dn = inf; dH_up = inf; sigma_d = 0;
+            hi_hold = hi_hold_init; % warm-up: stay high
+            up_count_level = 0; up_count_jump = 0; down_count = 0; cooldown = 0;
+        else
+            i0 = max(1, i-W_hist+1);
+            H_hist = Hacc_s(i0:i);
+            medH = median(H_hist);
+            iqrH = prctile(H_hist,75) - prctile(H_hist,25) + eps;
+            Th_enter = medH + 0.8 * iqrH; % gate to go HIGH
+            Th_exit  = medH + 0.2 * iqrH; % gate to go LOW (hysteresis)
+
+            dH_hist = abs(dHacc_raw(max(2,i-W_hist+1):i));
+            if isempty(dH_hist), dH_hist = 0; end
+            trim_thr = prctile(dH_hist,90);
+            d_trim = dH_hist(dH_hist <= trim_thr);
+            if isempty(d_trim), d_trim = 0; end
+            sigma_d = 1.4826 * mad(d_trim,1) + 1e-4;
+            k_up = k_up_lo;
+            if state_mode == "HIGH"
+                k_up = k_up_hi;
+            end
+            dH_up = k_up * sigma_d;
+            dH_dn = k_dn  * sigma_d;
+        end
+
+        Th_high_log(i) = Th_enter; % store enter-high gate here
+        Th_low_log(i)  = Th_exit;
         dH_up_log(i)   = dH_up;
         dH_dn_log(i)   = dH_dn;
 
-        % Log line per window (online; no future lookahead)
-        % fprintf('rec %02d win %03d fs=%4.1f Hppg=%.3f dH=%.3f ThL=%.3f ThH=%.3f dHdn=%.3f dHup=%.3f\n', ...
-        %     idnb, i, fs_cur, Hppg(i), dHppg(i), Th_low, Th_high, dH_dn, dH_up);
+        trig_up_jump = false; trig_up_level = false; stable = false; big_dip = false;
 
-        % Controller for next window (uses adaptive thresholds)
-        % Go UP (higher fs) if (PPG entropy is high) OR (PPG entropy jumped a lot).
-        % Go DOWN (lower fs) only if (PPG entropy is low) AND (PPG entropy is stable for a few windows).
-        go_up = (Hppg(i) > Th_high) || (dHppg(i) > dH_up);
-        go_down = (Hppg(i) < Th_low) && (abs(dHppg(i)) < dH_dn) && (hi_hold==0);
-
-        if go_up
-            fs_cur = fs_hi;
-            hi_hold = hi_hold_init;
-        elseif go_down
+        % State machine controller (burst-mode)
+        if i < W_min
+            state_mode = "LOW";
             fs_cur = fs_lo;
+        else
+            switch state_mode
+                case "LOW"
+                    fs_cur = fs_lo;
+                    if cooldown > 0
+                        cooldown = cooldown - 1;
+                        up_count_level = 0; up_count_jump = 0;
+                    else
+                        trig_up_jump = dHacc_raw(i) > dH_up;
+                        trig_up_level = Hacc_s(i) > Th_enter;
+                        if trig_up_level
+                            up_count_level = up_count_level + 1;
+                        else
+                            up_count_level = 0;
+                        end
+                        if trig_up_jump
+                            up_count_jump = up_count_jump + 1;
+                        else
+                            up_count_jump = 0;
+                        end
+                        if (up_count_level >= N_up_level) || (up_count_jump >= N_up_jump)
+                            state_mode = "HIGH";
+                            fs_cur = fs_hi;
+                            hi_hold = hi_hold_init;
+                            up_count_level = 0; up_count_jump = 0; down_count = 0;
+                            switches_up = switches_up + 1;
+                        end
+                    end
+                case "HIGH"
+                    fs_cur = fs_hi;
+                    big_dip = dHacc_raw(i) < -dH_up; % immediate down on large negative jump
+                    if hi_hold > 0
+                        hi_hold = hi_hold - 1;
+                    else
+                        stable = (Hacc_s(i) < Th_exit) && (abs(dHacc_raw(i)) < k_dn*sigma_d);
+                        if stable
+                            down_count = down_count + 1;
+                        else
+                            down_count = 0;
+                        end
+                        if down_count >= N_down
+                            state_mode = "LOW";
+                            fs_cur = fs_lo;
+                            cooldown = cooldown_init;
+                            up_count_level = 0; up_count_jump = 0; down_count = 0;
+                            switches_down = switches_down + 1;
+                        end
+                    end
+            end
         end
+        FsUsed(i) = fs_cur;
 
-        if hi_hold>0
-            fs_cur = fs_hi;
-            hi_hold = hi_hold - 1;
+        % Optional debug (toggle with DEBUG_LOG)
+        if DEBUG_LOG
+            fprintf(['rec %02d win %03d mode=%s fs=%4.1f Hacc_s=%.3f dHraw=%.3f ', ...
+                'ThEnter=%.3f ThExit=%.3f sig=%.3f jump=%d level=%d dip=%d stable=%d upL=%d upJ=%d dn=%d cool=%d hold=%d\n'], ...
+                idnb, i, state_mode, fs_cur, Hacc_s(i), dHacc_raw(i), Th_enter, Th_exit, sigma_d, ...
+                trig_up_jump, trig_up_level, big_dip, stable, up_count_level, up_count_jump, down_count, cooldown, hi_hold);
         end
     end
+    
 
     % Ground truth and error
     if idnb > 13
@@ -167,29 +237,24 @@ for idnb = 1:numel(IDData)
     % Store log
     logRec(idnb).ID = IDData{idnb};
     logRec(idnb).FsUsed = FsUsed;
-    logRec(idnb).Hppg = Hppg;
     logRec(idnb).Hacc = Hacc;
-    logRec(idnb).dHacc = dHacc;
+    logRec(idnb).Hacc_s = Hacc_s;
+    logRec(idnb).dHacc_raw = dHacc_raw;
     logRec(idnb).BPM_est = BPM_est(1:frames);
     logRec(idnb).BPM0 = BPM0(1:frames);
     logRec(idnb).Th_high_log = Th_high_log;
     logRec(idnb).Th_low_log  = Th_low_log;
     logRec(idnb).dH_up_log   = dH_up_log;
     logRec(idnb).dH_dn_log   = dH_dn_log;
+    logRec(idnb).switches_up = switches_up;
+    logRec(idnb).switches_down = switches_down;
 
     % Entropy summary stats
-    stats.Hppg.median = median(Hppg);
-    stats.Hppg.p25 = prctile(Hppg,25);
-    stats.Hppg.p75 = prctile(Hppg,75);
-    stats.Hppg.max = max(Hppg);
     stats.Hacc.median = median(Hacc);
     stats.Hacc.p25 = prctile(Hacc,25);
     stats.Hacc.p75 = prctile(Hacc,75);
     stats.Hacc.max = max(Hacc);
     logRec(idnb).entropyStats = stats;
-    %fprintf('Rec %02d Hppg: median=%.3f p25=%.3f p75=%.3f max=%.3f | Hacc: median=%.3f p25=%.3f p75=%.3f max=%.3f\n', ...
-        % idnb, stats.Hppg.median, stats.Hppg.p25, stats.Hppg.p75, stats.Hppg.max, ...
-        % stats.Hacc.median, stats.Hacc.p25, stats.Hacc.p75, stats.Hacc.max);
 end
 
 %% Aggregate metrics
