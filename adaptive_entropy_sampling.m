@@ -8,7 +8,7 @@ clear;  % close all;
 fs0 = 125;
 fs_hi = 25;
 fs_lo = 12.5;
-fs_acc = 25;                 % fixed-rate control stream for ACC
+fs_acc = 125;                 % fixed-rate control stream for ACC
 FFTres = 1024;
 WFlength = 15;                % Wiener averaging length (frames)
 CutoffFreqHzBP = [0.4 4];     % bandpass at 125 Hz before decimation
@@ -22,7 +22,7 @@ W_min = 10;                   % warm-up windows before normal adaptation
 nbits_entropy = 4;            % quantization for entropy proxy
 hi_hold_init = 3;             % min windows to stay high after switching up
 ema_beta = 0.85;              % smoothing for entropy (ACC-based control)
-k_up_lo = 3.0;                % sensitivity when in LOW mode
+k_up_lo = 3.0;                % sensitivity when in LOW mode (from LOW to HIGH)
 k_up_hi = 3.0;                % stricter when in HIGH mode
 k_dn    = 1.0;                % stability requirement for downshift
 N_up_level = 2;               % consecutive level-high windows to go HIGH
@@ -108,7 +108,7 @@ for idnb = 1:numel(IDData)
         % Run one-frame WFPV at fs_cur
         [BPM_est(i), state] = wfpv_one_frame(curData, fs_cur, FFTres, WFlength, CutoffFreqHzSearch, state, i, BPM_est, idnb);
 
-        % Save back mode state
+        % Save back mode state: context switching mechanism bcs each mode has its own WF history
         if fs_cur == fs_hi
             state_hi = state;
         else

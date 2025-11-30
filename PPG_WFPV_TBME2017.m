@@ -235,8 +235,10 @@ for idnb = 1 : allD
          
     if idnb > 0 fullBPM=[fullBPM BPM_est]; fullBPM0=[fullBPM0 BPM0']; end
     %plot best and worst performing patients
-    if idnb==14,           figure; plot(BPM0,'ro');hold on; plot(BPM_est(1:1:end),'o', 'Color','blue'); title(['Recording ' num2str(idnb)]); xlabel('Time (in frames)'); ylabel('HR'); legend({'Ground truth', 'Estimates'}); end;
-    if idnb==9,           figure; plot(BPM0,'ro');hold on; plot(BPM_est(1:1:end),'o', 'Color','blue'); title(['Recording ' num2str(idnb)]); xlabel('Time (in frames)'); ylabel('HR'); legend({'Ground truth', 'Estimates'}); end;
+    if idnb==20,           figure; plot(BPM0,'ro');hold on; plot(BPM_est(1:1:end),'o', 'Color','blue'); title(['Recording ' num2str(idnb)]); xlabel('Time (in frames)'); ylabel('HR'); legend({'Ground truth', 'Estimates'}); end;
+    if idnb==16,           figure; plot(BPM0,'ro');hold on; plot(BPM_est(1:1:end),'o', 'Color','blue'); title(['Recording ' num2str(idnb)]); xlabel('Time (in frames)'); ylabel('HR'); legend({'Ground truth', 'Estimates'}); end;
+    if idnb==2,           figure; plot(BPM0,'ro');hold on; plot(BPM_est(1:1:end),'o', 'Color','blue'); title(['Recording ' num2str(idnb)]); xlabel('Time (in frames)'); ylabel('HR'); legend({'Ground truth', 'Estimates'}); end;
+    if idnb==10,           figure; plot(BPM0,'ro');hold on; plot(BPM_est(1:1:end),'o', 'Color','blue'); title(['Recording ' num2str(idnb)]); xlabel('Time (in frames)'); ylabel('HR'); legend({'Ground truth', 'Estimates'}); end;
     
 end
 

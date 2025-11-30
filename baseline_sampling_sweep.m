@@ -1,17 +1,17 @@
 % baseline_sampling_sweep.m
 % Sweep ADC sampling rates while keeping the internal WFPV pipeline fixed at 25 Hz
-% (matching PPG_WFPV_TBME2017: filter at ADC rate -> downsample to 25 Hz -> FFT/Wiener/phase vocoder/peak tracking).
+% (matching PPG_WFPV_TBME2017: filter at 125 Hz -> window -> resample to ADC -> resample to 25 Hz -> WFPV).
 
 clear;  % close all;
 
 %% Configuration
 fs0 = 125;  % original sampling rate of the dataset
-%fs_list = [125 100 50 25 12.5 6.25 3.125];
-fs_list = [25 6.25 ];
+fs_list = [25 12.5 6.25];
+%fs_list = [25 20 12.5 10 6.25 5];
 fs_proc = 25;           % fixed internal rate for WFPV
 FFTres = 1024;          % FFT length at 25 Hz (original)
 WFlength = 15;          % Wiener averaging length (frames)
-CutoffFreqHzBP = [0.4 4];   % bandpass for PPG/ACC filtering (Hz) at ADC rate
+CutoffFreqHzBP = [0.4 4];   % bandpass for PPG/ACC filtering (Hz) at 125 Hz
 CutoffFreqHzSearch = [1 3]; % search band for HR peaks (Hz, 60–180 BPM) at 25 Hz
 
 IDData = {'DATA_01_TYPE01','DATA_02_TYPE02','DATA_03_TYPE02','DATA_04_TYPE02',...
@@ -39,13 +39,8 @@ for k = 1:numel(fs_list)
             ch = [2 3 4 5 6];
         end
 
-        % Resample to ADC target, bandpass at ADC rate, then resample to fixed 25 Hz for processing
-        sig_adc = resample_to_fs(sig(ch, :), fs0, fs_adc);
-        sig_filt = bp_filter_at_fs(sig_adc, fs_adc, CutoffFreqHzBP);
-        sig_proc = resample_to_fs(sig_filt, fs_adc, fs_proc);
-
-        % Run WFPV pipeline at fixed fs_proc (25 Hz), algorithm unchanged
-        BPM_est = run_wfpv_record(sig_proc, fs_proc, FFTres, WFlength, CutoffFreqHzSearch, idnb);
+        % Run WFPV pipeline with per-window resampling to fs_adc then to fs_proc (clean helper)
+        BPM_est = run_wfpv_record(sig(ch, :), fs0, fs_adc, fs_proc, FFTres, WFlength, CutoffFreqHzSearch, idnb, CutoffFreqHzBP);
 
         % Load ground truth BPM trace
         if idnb > 13
@@ -60,7 +55,7 @@ for k = 1:numel(fs_list)
         fullBPM  = [fullBPM, BPM_est(1:frames)];
 
         % Plot selected recordings 9 and 14 for comparison
-        if idnb==6 || idnb==12 || idnb==20
+        if idnb==2 || idnb==10 || idnb==16 || idnb==20
             figure;
             plot(BPM0,'ro'); hold on; plot(BPM_est(1:frames),'o','Color','blue');
             title(sprintf('Recording %d at fs=%.2f Hz', idnb, fs_adc));
@@ -91,60 +86,14 @@ ylabel('MAE (BPM)');
 title('WFPV MAE vs sampling frequency (25 Hz internal)');
 grid on;
 
-%% Helper: bandpass filter at ADC rate (pre-resample)
-function sig_filt = bp_filter_at_fs(sig, fs, bpHz)
-    % Safeguard high cutoff relative to Nyquist for low fs
-    bp = [bpHz(1), min(bpHz(2), 0.99*(fs/2))];
-    [b, a] = butter(4, bp/(fs/2), 'bandpass');
-    sig_filt = zeros(size(sig));
-    for c = 1:size(sig,1)
-        sig_filt(c,:) = filter(b, a, sig(c,:));
-    end
-end
-
-%% Helper: resample with anti-aliasing
-function sig_res = resample_to_fs(sig, fs_in, fs_out)
-    % sig: channels x samples
-    if abs(fs_out - fs_in) < eps
-        sig_res = sig;
-        return;
-    end
-
-    ratio = fs_out / fs_in;
-    [p,q] = rat(ratio,1e-12);  % integer resample factors
-    [nCh, nSamp] = size(sig);
-    expected_len = round(nSamp * p / q);
-
-    % Integer decimation when possible (use downsample to mirror original code path)
-    if fs_out < fs_in && abs(fs_in / fs_out - round(fs_in / fs_out)) < 1e-9
-        decim = round(fs_in / fs_out);
-        int_len = ceil(nSamp / decim);
-        sig_res = zeros(nCh, int_len);
-        for c = 1:nCh
-            tmp = downsample(sig(c, :), decim);
-            sig_res(c, 1:length(tmp)) = tmp;
-        end
-    else
-        sig_res = zeros(nCh, expected_len);
-        for c = 1:nCh
-            resampled = resample(sig(c, :), p, q);
-            % Trim or pad to expected length
-            if length(resampled) > expected_len
-                sig_res(c, :) = resampled(1:expected_len);
-            else
-                sig_res(c, 1:length(resampled)) = resampled;
-            end
-        end
-    end
-end
-
 %% Helper: WFPV pipeline for one recording at fixed 25 Hz
-function BPM_est = run_wfpv_record(sig, fs, FFTres, WFlength, searchHz, idnb)
-    % Assumes input sig is already bandpassed and resampled to fs (25 Hz).
-    window = round(8 * fs);
-    step = round(2 * fs);
+function BPM_est = run_wfpv_record(sig_raw, fs0, fs_adc, fs_proc, FFTres, WFlength, searchHz, idnb, bpHz)
+    % Bandpass at 125 Hz, then per-window resample to fs_adc, then (if needed) back to 25 Hz for the original WFPV logic
+    [b,a] = butter(4, bpHz/(fs0/2), 'bandpass');
+    window125 = round(8 * fs0);
+    step125 = round(2 * fs0);
 
-    windowNb = floor((size(sig, 2) - window) / step) + 1;
+    windowNb = floor((size(sig_raw, 2) - window125) / step125) + 1;
     if windowNb < 1
         BPM_est = [];
         return;
@@ -155,8 +104,23 @@ function BPM_est = run_wfpv_record(sig, fs, FFTres, WFlength, searchHz, idnb)
     clear W1_FFTi W11_FFTi W2_FFTi W21_FFTi W1_PPG_ave_FFT_Clean W2_PPG_ave_FFT_Clean W11_PPG_ave_FFT_Clean PPG_ave_FFT_FIN W21_PPG_ave_FFT_Clean PPG_ave_FFT_FIN;
 
     for i = 1:windowNb
-        curSegment = (i - 1) * step + 1 : (i - 1) * step + window;
-        curData = sig(:, curSegment);
+        curSegment = (i - 1) * step125 + 1 : (i - 1) * step125 + window125;
+        curDataRaw = sig_raw(:, curSegment);
+
+        % filter at 125 Hz
+        curDataFilt = zeros(size(curDataRaw));
+        for c = 1:size(curDataRaw,1)
+            curDataFilt(c,:) = filter(b,a,curDataRaw(c,:));
+        end
+        % resample to fs_adc (ADC rate) using decimate when integer ratio
+        % resample to fs_adc (ADC rate) using decimate when integer ratio; else use rational resample
+        curData_adc = do_resample(curDataFilt, fs0, fs_adc);
+        if abs(fs_adc - fs_proc) < eps
+            curData = curData_adc; fs = fs_proc;
+        else
+            curData = do_resample(curData_adc, fs_adc, fs_proc);
+            fs = fs_proc;
+        end
 
         PPG1 = curData(1, :);
         PPG2 = curData(2, :);
@@ -272,5 +236,39 @@ function BPM_est = run_wfpv_record(sig, fs, FFTres, WFlength, searchHz, idnb)
 
         mul = 0.1;
         BPM_est(i) = BPM_est(i) + sum(sign(BPM_est(max(2, i - 6):i) - BPM_est(max(1, i - 7):i - 1)) * mul);
+    end
+end
+
+function sig_res = do_resample(sig, fs_in, fs_out)
+    % Resample helper that uses decimation when integer ratio, otherwise rational resample.
+    if abs(fs_out - fs_in) < eps
+        sig_res = sig;
+        return;
+    end
+    ratio = fs_out / fs_in;
+    [nCh, nSamp] = size(sig);
+    if fs_out < fs_in && abs(fs_in/fs_out - round(fs_in/fs_out)) < 1e-9
+        decim = round(fs_in/fs_out);
+        sig_res = sig(:, 1:decim:end);
+    elseif fs_out > fs_in && abs(ratio - round(ratio)) < 1e-9
+        % simple upsample by integer factor (zero-order hold via resample)
+        up = round(ratio);
+        expected_len = nSamp * up;
+        sig_res = zeros(nCh, expected_len);
+        for c = 1:nCh
+            sig_res(c,:) = resample(sig(c,:), up, 1);
+        end
+    else
+        [p,q] = rat(ratio,1e-6);
+        expected_len = round(nSamp * p / q);
+        sig_res = zeros(nCh, expected_len);
+        for c = 1:nCh
+            tmp = resample(sig(c,:), p, q);
+            if length(tmp) > expected_len
+                sig_res(c,:) = tmp(1:expected_len);
+            else
+                sig_res(c,1:length(tmp)) = tmp;
+            end
+        end
     end
 end
