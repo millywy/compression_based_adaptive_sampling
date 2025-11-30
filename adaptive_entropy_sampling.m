@@ -108,7 +108,7 @@ for idnb = 1:numel(IDData)
         end
 
         % Entropy metrics: ACC control stream at fixed 25 Hz
-        Hacc(i) = entropy_proxy_context(ACCmag25, nbits_entropy);
+        Hacc(i) = entropy_proxy_arith_o1(ACCmag25, nbits_entropy);
         if i==1
             Hacc_s(i) = Hacc(i);
             dHacc_raw(i) = 0;
@@ -495,22 +495,7 @@ end
 
 %% compressors choices for entropy 
 
-%% Entropy proxy via delta symbols and histogram
-function H = entropy_proxy(x, nbits)
-x = (x - mean(x)) / (std(x) + eps);
-x = max(min(x, 3), -3);
-levels = 2^nbits;
-q = floor((x - min(x)) / (max(x) - min(x) + eps) * (levels - 1));
-if numel(q) < 2
-    H = 0;
-    return;
-end
-dq = diff(q);
-[counts, ~] = histcounts(dq, -levels:levels);
-p = counts / sum(counts);
-p = p(p>0);
-H = -sum(p .* log2(p));
-end
+
 
 %% ENTROPY_PROXY_CONTEXT Entropy estimator via context modeling (order-1) + ideal arithmetic length.
 function H = entropy_proxy_context(x, nbits)
@@ -567,3 +552,8 @@ function H = entropy_proxy_context(x, nbits)
 
     H = bits / (numel(sym)-1);         % bits per symbol (delta)
 end
+
+
+
+
+
