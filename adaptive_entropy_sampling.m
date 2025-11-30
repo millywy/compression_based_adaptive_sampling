@@ -7,8 +7,10 @@ clear;  % close all;
 %% Configuration
 fs0 = 125;
 fs_hi = 25;
-fs_lo = 12.5;
-fs_acc = 125;                 % fixed-rate control stream for ACC
+fs_lo = 6.25;
+fs_proc = 25;                 % internal WFPV processing rate (matches original)
+FORCE_HIGH = false;            % set true to sanity-check fixed 25 Hz mode
+fs_acc = 25;                 % fixed-rate control stream for ACC
 FFTres = 1024;
 WFlength = 15;                % Wiener averaging length (frames)
 CutoffFreqHzBP = [0.4 4];     % bandpass at 125 Hz before decimation
@@ -75,7 +77,7 @@ for idnb = 1:numel(IDData)
     state_lo = init_mode_state();
     fs_cur = fs_hi;   % start high
     hi_hold = 0;
-    state_mode = "LOW";
+    state_mode = "HIGH";  % start high
     cooldown = 0; up_count_level = 0; up_count_jump = 0; down_count = 0;
     switches_up = 0; switches_down = 0;
 
@@ -90,29 +92,19 @@ for idnb = 1:numel(IDData)
         end
 
         % ACC control stream at fixed 25 Hz
-        acc_decim = round(fs0/fs_acc); % should be 5
-        curAcc25 = curDataFilt(3:5, 1:acc_decim:end);
-        ACCmag25 = sqrt(curAcc25(1,:).^2 + curAcc25(2,:).^2 + curAcc25(3,:).^2);
+        curAcc_resampled = do_resample(curDataFilt(3:5, :), fs0, fs_acc);
+        ACCmag25 = sqrt(curAcc_resampled(1,:).^2 + curAcc_resampled(2,:).^2 + curAcc_resampled(3,:).^2);
 
-        % PPG/ACC for WFPV at current mode
+        % Run one-frame WFPV with internal resampling (match baseline helper)
+        state_in = state_hi;
+        if fs_cur ~= fs_hi, state_in = state_lo; end
+        [BPM_est(i), state_out] = wfpv_one_frame(curDataRaw, fs0, fs_cur, fs_proc, FFTres, WFlength, CutoffFreqHzSearch, state_in, i, BPM_est, idnb, CutoffFreqHzBP);
+
+        % Save back mode state
         if fs_cur == fs_hi
-            decim = round(fs0/fs_hi); % 5
-            curData = curDataFilt(:, 1:decim:end); % downsample along time (cols) to 25 Hz
-            state = state_hi;
+            state_hi = state_out;
         else
-            decim = round(fs0/fs_lo); % 10
-            curData = curDataFilt(:, 1:decim:end); % downsample along time (cols) to 12.5 Hz
-            state = state_lo;
-        end
-
-        % Run one-frame WFPV at fs_cur
-        [BPM_est(i), state] = wfpv_one_frame(curData, fs_cur, FFTres, WFlength, CutoffFreqHzSearch, state, i, BPM_est, idnb);
-
-        % Save back mode state: context switching mechanism bcs each mode has its own WF history
-        if fs_cur == fs_hi
-            state_hi = state;
-        else
-            state_lo = state;
+            state_lo = state_out;
         end
 
         % Entropy metrics: ACC control stream at fixed 25 Hz
@@ -160,9 +152,12 @@ for idnb = 1:numel(IDData)
         trig_up_jump = false; trig_up_level = false; stable = false; big_dip = false;
 
         % State machine controller (burst-mode)
-        if i < W_min
-            state_mode = "LOW";
-            fs_cur = fs_lo;
+        if FORCE_HIGH
+            state_mode = "HIGH"; fs_cur = fs_hi;
+            hi_hold = hi_hold_init;
+            cooldown = 0; up_count_level = 0; up_count_jump = 0; down_count = 0;
+        elseif i < W_min
+            state_mode = "LOW"; fs_cur = fs_lo;
         else
             switch state_mode
                 case "LOW"
@@ -325,7 +320,23 @@ state.rangeIdx = [];
 state.FreqRange = [];
 end
 
-function [BPM_val, state] = wfpv_one_frame(curData, fs, FFTres, WFlength, searchHz, state, i, BPM_est, idnb)
+function [BPM_val, state] = wfpv_one_frame(curDataRaw, fs0, fs_adc, fs_proc, FFTres, WFlength, searchHz, state, i, BPM_est, idnb, bpHz)
+% Bandpass at 125 Hz, resample to fs_adc, then to 25 Hz internal, then run original WFPV logic
+[b,a] = butter(4, bpHz/(fs0/2), 'bandpass');
+curDataFilt = zeros(size(curDataRaw));
+for c = 1:size(curDataRaw,1)
+    curDataFilt(c,:) = filter(b,a,curDataRaw(c,:));
+end
+% resample to fs_adc
+curData_adc = do_resample(curDataFilt, fs0, fs_adc);
+% resample to internal 25 Hz if needed
+if abs(fs_adc - fs_proc) < eps
+    curData = curData_adc; fs = fs_proc;
+else
+    curData = do_resample(curData_adc, fs_adc, fs_proc);
+    fs = fs_proc;
+end
+
 PPG1 = curData(1, :);
 PPG2 = curData(2, :);
 ACC_X = curData(3, :);
@@ -446,6 +457,39 @@ if i > 1
         BPM_val = BPM_val + sum(sign(diff(prev_seq))) * mul;
     end
 end
+end
+
+function sig_res = do_resample(sig, fs_in, fs_out)
+    % Resample helper that uses decimation when integer ratio, otherwise rational resample.
+    if abs(fs_out - fs_in) < eps
+        sig_res = sig;
+        return;
+    end
+    ratio = fs_out / fs_in;
+    [nCh, nSamp] = size(sig);
+    if fs_out < fs_in && abs(fs_in/fs_out - round(fs_in/fs_out)) < 1e-9
+        decim = round(fs_in/fs_out);
+        sig_res = sig(:, 1:decim:end);
+    elseif fs_out > fs_in && abs(ratio - round(ratio)) < 1e-9
+        up = round(ratio);
+        expected_len = nSamp * up;
+        sig_res = zeros(nCh, expected_len);
+        for c = 1:nCh
+            sig_res(c,:) = resample(sig(c,:), up, 1);
+        end
+    else
+        [p,q] = rat(ratio,1e-6);
+        expected_len = round(nSamp * p / q);
+        sig_res = zeros(nCh, expected_len);
+        for c = 1:nCh
+            tmp = resample(sig(c,:), p, q);
+            if length(tmp) > expected_len
+                sig_res(c,:) = tmp(1:expected_len);
+            else
+                sig_res(c,1:length(tmp)) = tmp;
+            end
+        end
+    end
 end
 
 
