@@ -21,7 +21,7 @@ step_sec = 2;
 % Adaptive entropy thresholds / hysteresis (tunable)
 W_hist = 30;                  % history length in windows (~60s at 2s hop)
 W_min = 10;                   % warm-up windows before normal adaptation
-nbits_entropy = 4;            % quantization for entropy proxy
+nbits_entropy = 2;            % quantization for entropy proxy
 hi_hold_init = 3;             % min windows to stay high after switching up
 ema_beta = 0.85;              % smoothing for entropy (ACC-based control)
 k_up_lo = 3.0;                % sensitivity when in LOW mode (from LOW to HIGH)
@@ -86,8 +86,13 @@ for idnb = 1:numel(IDData)
         curSegment = (i-1)*step+1 : (i-1)*step+window;
         curDataRaw = sig(ch, curSegment);
 
+        curDataFilt = zeros(size(curDataRaw));
+        for c = 1:size(curDataRaw,1)
+            curDataFilt(c,:) = filter(b125, a125, curDataRaw(c,:));
+        end
+
         % ACC control stream at fixed 25 Hz
-        curAcc_resampled = do_resample(curDataRaw(3:5, :), fs0, fs_acc);
+        curAcc_resampled = do_resample(curDataFilt(3:5, :), fs0, fs_acc);
         ACCmag25 = sqrt(curAcc_resampled(1,:).^2 + curAcc_resampled(2,:).^2 + curAcc_resampled(3,:).^2);
         ACCmag25_log(i) = mean(ACCmag25);
 
@@ -105,7 +110,7 @@ for idnb = 1:numel(IDData)
         end
 
         % Entropy metrics: ACC control stream at fixed 25 Hz
-        Hacc(i) = entropy_proxy_hist(ACCmag25, nbits_entropy);
+        Hacc(i) = entropy_proxy_arith_o1(ACCmag25, nbits_entropy);
         if i==1
             Hacc_s(i) = Hacc(i);
             dHacc_raw(i) = 0;
@@ -299,19 +304,20 @@ for idx = 1:numel(selRecs)
         xlabel('Time (frames)'); ylabel('HR (BPM)'); legend({'Ground truth','Estimates'});
         grid on;
 
-        % Hacc and FsUsed over time (time axis in seconds, optional frame ticks on top)
-        figure;
-        yyaxis left; plot(frames, logRec(r).Hacc, '-'); ylabel('Hacc (bits)');
-        yyaxis right; stairs(frames, logRec(r).FsUsed, '-'); ylabel('FsUsed (Hz)');
-        xlabel('Time (frames)'); title(sprintf('Entropy & FsUsed - Recording %d', r));
-        grid on;
+        % % Hacc and FsUsed over time (time axis in seconds, optional frame ticks on top)
+        % figure;
+        % yyaxis left; plot(frames, logRec(r).Hacc, '-'); ylabel('Hacc (bits)');
+        % yyaxis right; stairs(frames, logRec(r).FsUsed, '-'); ylabel('FsUsed (Hz)');
+        % xlabel('Time (frames)'); title(sprintf('Entropy & FsUsed - Recording %d', r));
+        % grid on;
 
-        % ACC data plot with same frame axis
+        % Combined overlay: Hacc, dHacc_raw, FsUsed, ACC magnitude
         figure;
-        plot(frames, logRec(r).ACC_mag_25, '-'); % see logging note below
-        title(sprintf('ACC magnitude @25 Hz - Recording %d', r));
-        xlabel('Time (frames)'); ylabel('ACC magnitude (au)');
-        grid on;
+        ax1 = subplot(4,1,1); plot(frames, logRec(r).Hacc, '-'); ylabel('Hacc (bits)'); title(sprintf('Recording %d - Entropy & Sampling', r));
+        ax2 = subplot(4,1,2); plot(frames, logRec(r).dHacc_raw, '-'); ylabel('dHacc (bits)'); grid on;
+        ax3 = subplot(4,1,3); stairs(frames, logRec(r).FsUsed, '-'); ylabel('FsUsed (Hz)'); grid on;
+        ax4 = subplot(4,1,4); plot(frames, logRec(r).ACC_mag_25, '-'); ylabel('ACC mag'); xlabel('Time (frames)'); grid on;
+        linkaxes([ax1 ax2 ax3 ax4],'x'); grid(ax1,'on');
 
     end
 end
@@ -559,5 +565,4 @@ function H = entropy_proxy_context(x, nbits)
 
     H = bits / (numel(sym)-1);         % bits per symbol (delta)
 end
-
 
