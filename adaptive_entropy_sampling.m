@@ -67,6 +67,7 @@ for idnb = 1:numel(IDData)
     Hacc    = zeros(1, windowNb);      % ACC entropy at fixed 25 Hz
     Hacc_s  = zeros(1, windowNb);      % smoothed ACC entropy
     dHacc_raw = zeros(1, windowNb);    % raw ACC entropy diff (jump metric)
+    ACCmag25_log = zeros(1, windowNb); % mean ACC magnitude per window
     Th_high_log = zeros(1, windowNb);  % store enter-high gate
     Th_low_log  = zeros(1, windowNb);  % store exit-low gate
     dH_up_log   = zeros(1, windowNb);  % jump threshold
@@ -85,15 +86,11 @@ for idnb = 1:numel(IDData)
         curSegment = (i-1)*step+1 : (i-1)*step+window;
         curDataRaw = sig(ch, curSegment);
 
-        % filter at 125 Hz
-        curDataFilt = zeros(size(curDataRaw));
-        for c = 1:size(curDataRaw,1)
-            curDataFilt(c,:) = filter(b125, a125, curDataRaw(c,:));
-        end
-
         % ACC control stream at fixed 25 Hz
-        curAcc_resampled = do_resample(curDataFilt(3:5, :), fs0, fs_acc);
+        curAcc_resampled = do_resample(curDataRaw(3:5, :), fs0, fs_acc);
         ACCmag25 = sqrt(curAcc_resampled(1,:).^2 + curAcc_resampled(2,:).^2 + curAcc_resampled(3,:).^2);
+        ACCmag25_log(i) = mean(ACCmag25);
+
 
         % Run one-frame WFPV with internal resampling (match baseline helper)
         state_in = state_hi;
@@ -108,7 +105,7 @@ for idnb = 1:numel(IDData)
         end
 
         % Entropy metrics: ACC control stream at fixed 25 Hz
-        Hacc(i) = entropy_proxy_arith_o1(ACCmag25, nbits_entropy);
+        Hacc(i) = entropy_proxy_hist(ACCmag25, nbits_entropy);
         if i==1
             Hacc_s(i) = Hacc(i);
             dHacc_raw(i) = 0;
@@ -243,6 +240,8 @@ for idnb = 1:numel(IDData)
     logRec(idnb).dH_dn_log   = dH_dn_log;
     logRec(idnb).switches_up = switches_up;
     logRec(idnb).switches_down = switches_down;
+    logRec(idnb).ACC_mag_25 = ACCmag25_log(1:frames);
+
 
     % Entropy summary stats
     stats.Hacc.median = median(Hacc);
@@ -285,7 +284,7 @@ fprintf('Mode usage: high=%.1f%% low=%.1f%%\n', pct_hi, pct_lo);
 save('adaptive_entropy_logs.mat', 'logRec', 'myError', 'MAE_all', 'MAE_train', 'MAE_test');
 
 %% Selected recordings for comparison
-selRecs = [6 12 20];
+selRecs = [2 10 16 20];
 for idx = 1:numel(selRecs)
     r = selRecs(idx);
     if r <= numel(logRec) && ~isempty(logRec(r).BPM0)
@@ -306,6 +305,14 @@ for idx = 1:numel(selRecs)
         yyaxis right; stairs(frames, logRec(r).FsUsed, '-'); ylabel('FsUsed (Hz)');
         xlabel('Time (frames)'); title(sprintf('Entropy & FsUsed - Recording %d', r));
         grid on;
+
+        % ACC data plot with same frame axis
+        figure;
+        plot(frames, logRec(r).ACC_mag_25, '-'); % see logging note below
+        title(sprintf('ACC magnitude @25 Hz - Recording %d', r));
+        xlabel('Time (frames)'); ylabel('ACC magnitude (au)');
+        grid on;
+
     end
 end
 
@@ -552,8 +559,5 @@ function H = entropy_proxy_context(x, nbits)
 
     H = bits / (numel(sym)-1);         % bits per symbol (delta)
 end
-
-
-
 
 
