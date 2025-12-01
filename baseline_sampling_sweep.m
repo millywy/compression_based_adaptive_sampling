@@ -20,6 +20,7 @@ IDData = {'DATA_01_TYPE01','DATA_02_TYPE02','DATA_03_TYPE02','DATA_04_TYPE02',..
     'TEST_S01_T01', 'TEST_S02_T01', 'TEST_S02_T02', 'TEST_S03_T02', ...
     'TEST_S04_T02', 'TEST_S05_T02', 'TEST_S06_T01', 'TEST_S06_T02',...
     'TEST_S07_T02', 'TEST_S08_T01'};
+traceLog = repmat(struct('ID',[],'BPM0',[],'est',struct('fs',[],'BPM',[])),1,numel(IDData));
 
 %% Sweep over sampling rates
 results = struct('fs', [], 'MAE_all', [], 'MAE_train', [], 'MAE_test', []);
@@ -54,13 +55,26 @@ for k = 1:numel(fs_list)
         fullBPM0 = [fullBPM0, BPM0(1:frames)'];
         fullBPM  = [fullBPM, BPM_est(1:frames)];
 
-        % Plot selected recordings 9 and 14 for comparison
-        if idnb==2 || idnb==10 || idnb==16 || idnb==20
-            figure;
-            plot(BPM0,'ro'); hold on; plot(BPM_est(1:frames),'o','Color','blue');
-            title(sprintf('Recording %d at fs=%.2f Hz', idnb, fs_adc));
-            xlabel('Time (frames)'); ylabel('HR (BPM)'); legend({'Ground truth','Estimates'});
+        % Cache traces for multi-fs plotting after sweep
+        if isempty(traceLog(idnb).ID)
+            traceLog(idnb).ID = IDData{idnb};
+            traceLog(idnb).BPM0 = BPM0(:)';
+            traceLog(idnb).est = struct('fs', {}, 'BPM', {});
         end
+        estEntry = struct('fs', fs_adc, 'BPM', BPM_est(1:frames));
+        if isempty(traceLog(idnb).est)
+            traceLog(idnb).est = estEntry;
+        else
+            traceLog(idnb).est(end+1) = estEntry;
+        end
+
+        % Plot selected recordings 9 and 14 for comparison
+        % if idnb==2 || idnb==10 || idnb==16 || idnb==20
+        %     figure;
+        %     plot(BPM0,'ro'); hold on; plot(BPM_est(1:frames),'o','Color','blue');
+        %     title(sprintf('Recording %d at fs=%.2f Hz', idnb, fs_adc));
+        %     xlabel('Time (frames)'); ylabel('HR (BPM)'); legend({'Ground truth','Estimates'});
+        % end
     end
 
     results(k).fs = fs_adc;
@@ -78,6 +92,34 @@ for k = 1:numel(fs_list)
     fprintf('Overall correlation coefficient (fs=%.2f): %.4f\n', fs_adc, tmp(1,2));
 end
 
+%% Plot selected recordings with all fs overlays
+selRecs = [1 2 3 4 5 6 7 8 9 10];
+for idx = 1:numel(selRecs)
+    r = selRecs(idx);
+    if r > numel(traceLog) || isempty(traceLog(r).ID) || isempty(traceLog(r).est)
+        continue;
+    end
+    % sort estimates by fs for consistent legend
+    est_fs = [traceLog(r).est.fs];
+    [~, ord] = sort(est_fs);
+    est_sorted = traceLog(r).est(ord);
+
+    figure;
+    hold on;
+    % plot ground truth (trim to min length across estimates)
+    min_len = min(cellfun(@(x) numel(x), [{traceLog(r).BPM0}, arrayfun(@(e) e.BPM, est_sorted, 'UniformOutput', false)]));
+    plot(traceLog(r).BPM0(1:min_len), 'o', 'Color','black', 'LineWidth', 1.25, 'DisplayName', 'Ground truth');
+    cmap = lines(numel(est_sorted));
+    for ee = 1:numel(est_sorted)
+        frames = min(min_len, numel(est_sorted(ee).BPM));
+        plot(est_sorted(ee).BPM(1:frames), 'o', 'Color', cmap(ee,:), 'LineWidth', 1.0, ...
+            'DisplayName', sprintf('Estimate fs=%.2f', est_sorted(ee).fs));
+    end
+    title(sprintf('Recording %d: BPM estimates vs ground truth', r));
+    xlabel('Time (frames)'); ylabel('HR (BPM)');
+    legend('Location','best'); grid on;
+end
+
 %% Plot MAE vs sampling frequency
 figure;
 plot([results.fs], [results.MAE_all], '-o', 'LineWidth', 1.25);
@@ -85,4 +127,3 @@ xlabel('Sampling frequency (Hz)');
 ylabel('MAE (BPM)');
 title('WFPV MAE vs sampling frequency (25 Hz internal)');
 grid on;
-
