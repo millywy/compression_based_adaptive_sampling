@@ -1,5 +1,5 @@
 %% Helper: WFPV pipeline for one recording at fixed 25 Hz
-function [BPM_est, Hacc, ACCmag25] = run_wfpv_record(sig_raw, fs0, fs_adc, fs_proc, FFTres, WFlength, searchHz, idnb, bpHz)
+function [BPM_est, Hacc, ACCmag25, dHacc, ddHacc] = run_wfpv_record(sig_raw, fs0, fs_adc, fs_proc, FFTres, WFlength, searchHz, idnb, bpHz)
     % Bandpass at 125 Hz, then per-window resample to fs_adc, then (if needed) back to 25 Hz for the original WFPV logic
     [b125,a125] = butter(4, bpHz/(fs0/2), 'bandpass');
     fs_acc = 25;           % fixed ACC control stream for entropy
@@ -17,7 +17,8 @@ function [BPM_est, Hacc, ACCmag25] = run_wfpv_record(sig_raw, fs0, fs_adc, fs_pr
 
     BPM_est = zeros(1, windowNb);
     Hacc = zeros(1, windowNb);
-    % dHacc = zeros(1, windowNb);
+    dHacc = zeros(1, windowNb);
+    ddHacc = zeros(1, windowNb);
     ACCmag25= zeros(1, windowNb);
     
 
@@ -49,7 +50,18 @@ function [BPM_est, Hacc, ACCmag25] = run_wfpv_record(sig_raw, fs0, fs_adc, fs_pr
         curAcc25 = do_resample(curDataFilt(3:5, :), fs0, fs_acc);
         accMagVec = sqrt(curAcc25(1,:).^2 + curAcc25(2,:).^2 + curAcc25(3,:).^2);
         ACCmag25(i) = mean(accMagVec);
-        Hacc(i) = entropy_proxy_arith_o1(accMagVec, nbits_entropy);
+        Hacc(i) = entropy_proxy_hist(accMagVec, nbits_entropy);
+        if i == 1
+            dHacc(i) = 0;
+            ddHacc(i) = 0;
+        else
+            dHacc(i) = Hacc(i) - Hacc(i-1);
+            if i == 2
+                ddHacc(i) = 0;
+            else
+                ddHacc(i) = dHacc(i) - dHacc(i-1);
+            end
+        end
 
         PPG1 = curData(1, :);
         PPG2 = curData(2, :);
@@ -175,6 +187,10 @@ function sig_res = do_resample(sig, fs_in, fs_out)
         return;
     end
     ratio = fs_out / fs_in;
+    [p,q] = rat(ratio, 1e-12);
+
+    % resample expects time along rows => transpose twice
+    sig_res = resample(sig.', p, q).';
     [nCh, nSamp] = size(sig);
     if fs_out < fs_in && abs(fs_in/fs_out - round(fs_in/fs_out)) < 1e-9
         decim = round(fs_in/fs_out);

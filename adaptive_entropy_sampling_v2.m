@@ -138,7 +138,7 @@ MAE_test = mean(myError(13:end), 'omitnan');
 fprintf('\n=== Adaptive Entropy Sampling v2 Results ===\n');
 fprintf('Err12=%2.2f, Err11=%2.2f, ErrAll=%2.2f\n', MAE_train, MAE_test, MAE_all);
 
-%% Helpers
+%% helpers
 function state = init_mode_state()
 state.W1_FFTi = [];
 state.W11_FFTi = [];

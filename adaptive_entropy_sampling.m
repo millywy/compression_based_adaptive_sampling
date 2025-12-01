@@ -289,7 +289,7 @@ fprintf('Mode usage: high=%.1f%% low=%.1f%%\n', pct_hi, pct_lo);
 save('adaptive_entropy_logs.mat', 'logRec', 'myError', 'MAE_all', 'MAE_train', 'MAE_test');
 
 %% Selected recordings for comparison
-selRecs = [2 10 16 20];
+selRecs = [6 15 17 21 22];
 for idx = 1:numel(selRecs)
     r = selRecs(idx);
     if r <= numel(logRec) && ~isempty(logRec(r).BPM0)

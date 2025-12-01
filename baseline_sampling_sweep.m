@@ -42,7 +42,7 @@ for k = 1:numel(fs_list)
 
         % Run WFPV pipeline with per-window resampling to fs_adc then to fs_proc (clean helper)
         % Run WFPV pipeline with entropy helper (returns Hacc for plotting)
-        [BPM_est, Hacc_est] = run_wfpv_entropy(sig(ch, :), fs0, fs_adc, fs_proc, FFTres, WFlength, CutoffFreqHzSearch, idnb, CutoffFreqHzBP);
+        [BPM_est, Hacc_est, ACCmag_est, dHacc_est, ddHacc_est] = run_wfpv_entropy(sig(ch, :), fs0, fs_adc, fs_proc, FFTres, WFlength, CutoffFreqHzSearch, idnb, CutoffFreqHzBP);
 
         % Load ground truth BPM trace
         if idnb > 13
@@ -62,7 +62,7 @@ for k = 1:numel(fs_list)
             traceLog(idnb).BPM0 = BPM0(:)';
             traceLog(idnb).est = struct('fs', {}, 'BPM', {});
         end
-        estEntry = struct('fs', fs_adc, 'BPM', BPM_est(1:frames), 'Hacc', Hacc_est(1:frames));
+        estEntry = struct('fs', fs_adc, 'BPM', BPM_est(1:frames), 'Hacc', Hacc_est(1:frames), 'dHacc', dHacc_est(1:frames), 'ddHacc', ddHacc_est(1:frames));
         if isempty(traceLog(idnb).est)
             traceLog(idnb).est = estEntry;
         else
@@ -94,7 +94,11 @@ for k = 1:numel(fs_list)
 end
 
 %% Plot selected recordings with all fs overlays
-selRecs = [1 2 3 4 5 6 7 8 9 10];
+% selRecs = [1 3 5 7 8 9]; %good 
+% selRecs = [6 15 17 21 22]; %bad: rising fast
+% selRecs = [10 17 19 21]; %high BPM
+selRecs = [1 3 6 17 21]; %high BPM
+
 for idx = 1:numel(selRecs)
     r = selRecs(idx);
     if r > numel(traceLog) || isempty(traceLog(r).ID) || isempty(traceLog(r).est)
@@ -122,13 +126,14 @@ for idx = 1:numel(selRecs)
 
     % Hacc overlay on same subplot (right axis) for quick comparison
     yyaxis right;
-    min_len_hacc = min(cellfun(@(x) numel(x), arrayfun(@(e) e.Hacc, est_sorted, 'UniformOutput', false)));
-    for ee = 1:numel(est_sorted)
-        frames = min(min_len_hacc, numel(est_sorted(ee).Hacc));
-        plot(est_sorted(ee).Hacc(1:frames), '--', 'Color', cmap(ee,:), 'LineWidth', 1.0, ...
-            'DisplayName', sprintf('Hacc fs=%.2f', est_sorted(ee).fs));
-    end
-    ylabel('Hacc (bits)');
+    % Hacc/dHacc are identical across fs (ACC always 25 Hz), plot once
+    hacc_vec = est_sorted(1).Hacc;
+    dhacc_vec = est_sorted(1).dHacc;
+    plot(hacc_vec, '--', 'Color', 'green', 'LineWidth', 1.0, ...
+        'DisplayName', 'Hacc (25 Hz ACC)');
+    plot(dhacc_vec, '-', 'Color', [0 1 1], 'LineWidth', 1.0, ...
+        'DisplayName', 'dHacc (25 Hz ACC)');
+    ylabel('Hacc / dHacc');
     yyaxis left;
 end
 
