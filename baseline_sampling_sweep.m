@@ -41,7 +41,8 @@ for k = 1:numel(fs_list)
         end
 
         % Run WFPV pipeline with per-window resampling to fs_adc then to fs_proc (clean helper)
-        BPM_est = run_wfpv_record(sig(ch, :), fs0, fs_adc, fs_proc, FFTres, WFlength, CutoffFreqHzSearch, idnb, CutoffFreqHzBP);
+        % Run WFPV pipeline with entropy helper (returns Hacc for plotting)
+        [BPM_est, Hacc_est] = run_wfpv_entropy(sig(ch, :), fs0, fs_adc, fs_proc, FFTres, WFlength, CutoffFreqHzSearch, idnb, CutoffFreqHzBP);
 
         % Load ground truth BPM trace
         if idnb > 13
@@ -61,7 +62,7 @@ for k = 1:numel(fs_list)
             traceLog(idnb).BPM0 = BPM0(:)';
             traceLog(idnb).est = struct('fs', {}, 'BPM', {});
         end
-        estEntry = struct('fs', fs_adc, 'BPM', BPM_est(1:frames));
+        estEntry = struct('fs', fs_adc, 'BPM', BPM_est(1:frames), 'Hacc', Hacc_est(1:frames));
         if isempty(traceLog(idnb).est)
             traceLog(idnb).est = estEntry;
         else
@@ -105,9 +106,9 @@ for idx = 1:numel(selRecs)
     est_sorted = traceLog(r).est(ord);
 
     figure;
-    hold on;
     % plot ground truth (trim to min length across estimates)
     min_len = min(cellfun(@(x) numel(x), [{traceLog(r).BPM0}, arrayfun(@(e) e.BPM, est_sorted, 'UniformOutput', false)]));
+    hold on;
     plot(traceLog(r).BPM0(1:min_len), 'o', 'Color','black', 'LineWidth', 1.25, 'DisplayName', 'Ground truth');
     cmap = lines(numel(est_sorted));
     for ee = 1:numel(est_sorted)
@@ -118,6 +119,17 @@ for idx = 1:numel(selRecs)
     title(sprintf('Recording %d: BPM estimates vs ground truth', r));
     xlabel('Time (frames)'); ylabel('HR (BPM)');
     legend('Location','best'); grid on;
+
+    % Hacc overlay on same subplot (right axis) for quick comparison
+    yyaxis right;
+    min_len_hacc = min(cellfun(@(x) numel(x), arrayfun(@(e) e.Hacc, est_sorted, 'UniformOutput', false)));
+    for ee = 1:numel(est_sorted)
+        frames = min(min_len_hacc, numel(est_sorted(ee).Hacc));
+        plot(est_sorted(ee).Hacc(1:frames), '--', 'Color', cmap(ee,:), 'LineWidth', 1.0, ...
+            'DisplayName', sprintf('Hacc fs=%.2f', est_sorted(ee).fs));
+    end
+    ylabel('Hacc (bits)');
+    yyaxis left;
 end
 
 %% Plot MAE vs sampling frequency
