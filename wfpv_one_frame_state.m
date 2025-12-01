@@ -1,13 +1,3 @@
-function state = init_mode_state()
-state.W1_FFTi = [];
-state.W11_FFTi = [];
-state.W2_FFTi = [];
-state.W21_FFTi = [];
-state.prevFFT = [];
-state.rangeIdx = [];
-state.FreqRange = [];
-end
-
 function [BPM_val, state] = wfpv_one_frame(curDataRaw, fs0, fs_adc, fs_proc, FFTres, WFlength, searchHz, state, i, BPM_est, idnb)
 % Bandpass at 125 Hz, resample to fs_adc, then to 25 Hz internal, then run original WFPV logic
 [b,a] = butter(4, [0.4 4]/(fs0/2), 'bandpass');

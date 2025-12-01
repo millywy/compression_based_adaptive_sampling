@@ -36,16 +36,6 @@ function [BPM_est, Hacc, ACCmag25, dHacc, ddHacc] = run_wfpv_record(sig_raw, fs0
             curDataFilt(c,:) = filter(b125,a125,curDataRaw(c,:));
         end
 
-        % resample to fs_adc (ADC rate) using decimate when integer ratio
-        % resample to fs_adc (ADC rate) using decimate when integer ratio; else use rational resample
-        curData_adc = do_resample(curDataFilt, fs0, fs_adc);
-        if abs(fs_adc - fs_proc) < eps
-            curData = curData_adc; fs = fs_proc;
-        else
-            curData = do_resample(curData_adc, fs_adc, fs_proc);
-            fs = fs_proc;
-        end
-
         % ACC control stream at fixed 25 Hz
         curAcc25 = do_resample(curDataFilt(3:5, :), fs0, fs_acc);
         accMagVec = sqrt(curAcc25(1,:).^2 + curAcc25(2,:).^2 + curAcc25(3,:).^2);
@@ -61,6 +51,16 @@ function [BPM_est, Hacc, ACCmag25, dHacc, ddHacc] = run_wfpv_record(sig_raw, fs0
             else
                 ddHacc(i) = dHacc(i) - dHacc(i-1);
             end
+        end
+
+        % resample to fs_adc (ADC rate) using decimate when integer ratio
+        % resample to fs_adc (ADC rate) using decimate when integer ratio; else use rational resample
+        curData_adc = do_resample(curDataFilt, fs0, fs_adc);
+        if abs(fs_adc - fs_proc) < eps
+            curData = curData_adc; fs = fs_proc;
+        else
+            curData = do_resample(curData_adc, fs_adc, fs_proc);
+            fs = fs_proc;
         end
 
         PPG1 = curData(1, :);
