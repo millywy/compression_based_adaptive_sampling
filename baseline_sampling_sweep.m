@@ -11,7 +11,7 @@ fs_list = [25 12.5 6.25];
 fs_proc = 25;           % fixed internal rate for WFPV
 FFTres = 1024;          % FFT length at 25 Hz (original)
 WFlength = 15;          % Wiener averaging length (frames)
-CutoffFreqHzBP = [0.4 4];   % bandpass for PPG/ACC filtering (Hz) at 125 Hz
+CutoffFreqHzBP = [0.4 3];   % bandpass for PPG/ACC filtering (Hz) at 125 Hz
 CutoffFreqHzSearch = [1 3]; % search band for HR peaks (Hz, 60–180 BPM) at 25 Hz
 
 IDData = {'DATA_01_TYPE01','DATA_02_TYPE02','DATA_03_TYPE02','DATA_04_TYPE02',...

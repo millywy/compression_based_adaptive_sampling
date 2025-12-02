@@ -13,7 +13,7 @@ FORCE_LOW = false;            % set true to sanity-check fixed Hz mode
 fs_acc = 25;                 % fixed-rate control stream for ACC
 FFTres = 1024;
 WFlength = 15;          % Wiener averaging length (frames)
-CutoffFreqHzBP = [0.4 4];     % bandpass at 125 Hz before decimation
+CutoffFreqHzBP = [0.4 3];     % bandpass at 125 Hz before decimation
 CutoffFreqHzSearch = [1 3];   % HR search band (Hz)
 window_sec = 8;
 step_sec = 2;
@@ -25,7 +25,7 @@ nbits_entropy = 2;            % quantization for entropy proxy
 hi_hold = 20;                 % min windows to stay high after going HIGH
 Th_hi = 0.15;                  % unstable = above this
 N_look_back = 7;               % windows to look back for stable entropy
-N_unstable = 3;                % unstable windows to go HIGH
+N_unstable = 2;                % unstable windows to go HIGH
 Th_low = 0.13;                 % stable = below this
 N_stable  = 5;                % min stable windows in high before going LOW
 
