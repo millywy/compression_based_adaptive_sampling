@@ -9,7 +9,7 @@ fs0 = 125;
 fs_hi = 25;
 fs_lo = 6.25;
 fs_proc = 25;                 % internal WFPV processing rate (matches original)
-FORCE_HIGH = false;            % set true to sanity-check fixed 25 Hz mode
+FORCE_LOW = false;            % set true to sanity-check fixed Hz mode
 fs_acc = 25;                 % fixed-rate control stream for ACC
 FFTres = 1024;
 WFlength = 15;          % Wiener averaging length (frames)
@@ -22,7 +22,7 @@ fs_next = fs_lo;   % initially low
 % Adaptive entropy thresholds / hysteresis (tunable)
 % W_min = 10;                   % warm-up windows before normal adaptation
 nbits_entropy = 2;            % quantization for entropy proxy
-hi_hold = 15;                 % min windows to stay high after going HIGH
+hi_hold = 20;                 % min windows to stay high after going HIGH
 Th_hi = 0.15;                  % unstable = above this
 N_look_back = 7;               % windows to look back for stable entropy
 N_unstable = 3;                % unstable windows to go HIGH
@@ -133,8 +133,8 @@ for idnb = 1:numel(IDData)
         trig_up = false; trig_down = false; unstable_at_lo = false; stable_at_hi = false; 
 
         % State machine controller
-        if FORCE_HIGH
-            state_mode = "HIGH"; fs_next = fs_hi;
+        if FORCE_LOW
+            state_mode = "LOW"; fs_next = fs_lo;
         else
             switch state_mode
                 case "LOW"
