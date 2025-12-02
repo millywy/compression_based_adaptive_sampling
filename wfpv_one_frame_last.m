@@ -1,17 +1,24 @@
-function [BPM_val, state] = wfpv_one_frame(curDataRaw, fs0, fs_adc, fs_proc, FFTres, WFlength, searchHz, state, i, BPM_est, idnb)
+function [BPM_val, Hacc1, ACCmag25_log1, state] = wfpv_one_frame_last2(curDataRaw, fs0, fs_adc, fs_proc, FFTres, WFlength, searchHz, state, i, BPM_est, idnb)
 % Bandpass at 125 Hz, resample to fs_adc, then to 25 Hz internal, then run original WFPV logic
 [b,a] = butter(4, [0.4 4]/(fs0/2), 'bandpass');
 curDataFilt = zeros(size(curDataRaw));
 for c = 1:size(curDataRaw,1)
     curDataFilt(c,:) = filter(b,a,curDataRaw(c,:));
 end
+
+% ACC control stream at fixed 25 Hz
+curAcc_resampled = do_resample_last(curDataFilt(3:5, :), fs0, fs_acc);
+ACCmag25 = sqrt(curAcc_resampled(1,:).^2 + curAcc_resampled(2,:).^2 + curAcc_resampled(3,:).^2);
+ACCmag25_log1 = mean(ACCmag25);
+Hacc1 = entropy_proxy_hist(ACCmag25, nbits_entropy);
+
 % resample to fs_adc
-curData_adc = do_resample(curDataFilt, fs0, fs_adc);
+curData_adc = do_resample_last(curDataFilt, fs0, fs_adc);
 % resample to internal 25 Hz if needed
 if abs(fs_adc - fs_proc) < eps
     curData = curData_adc; fs = fs_proc;
 else
-    curData = do_resample(curData_adc, fs_adc, fs_proc);
+    curData = do_resample_last(curData_adc, fs_adc, fs_proc);
     fs = fs_proc;
 end
 
@@ -134,36 +141,52 @@ if i > 1
 end
 end
 
-function sig_res = do_resample(sig, fs_in, fs_out)
-    if abs(fs_out - fs_in) < eps
-        sig_res = sig; return;
+function sig_res = do_resample_last(sig, fs_in, fs_out)
+%DO_RESAMPLE Resample multi-channel signal (channels x samples) with proper anti-aliasing.
+% Uses DECIMATE for integer downsampling ratios, otherwise RESAMPLE with rational p/q.
+%
+% sig:   [nCh x nSamp] (time along columns)
+% fs_in: input sample rate (Hz)
+% fs_out: output sample rate (Hz)
+
+    if abs(fs_out - fs_in) < 1e-12
+        sig_res = sig;
+        return;
     end
-    ratio = fs_out / fs_in;
+
     [nCh, nSamp] = size(sig);
-    if fs_out < fs_in && abs(fs_in/fs_out - round(fs_in/fs_out)) < 1e-9
-        decim = round(fs_in/fs_out);
-        sig_res = sig(:, 1:decim:end);
-    elseif fs_out > fs_in && abs(ratio - round(ratio)) < 1e-9
-        up = round(ratio);
-        expected_len = nSamp * up;
-        sig_res = zeros(nCh, expected_len);
+
+    % ---------- Case 1: integer-factor downsample ----------
+    r = fs_in / fs_out;
+    if fs_out < fs_in && abs(r - round(r)) < 1e-9
+        decim = round(r);
+        % decimate includes an anti-alias lowpass; FIR is safer for bio signals
+        outLens = ceil(nSamp / decim);
+        sig_res = zeros(nCh, outLens);
         for c = 1:nCh
-            sig_res(c,:) = resample(sig(c,:), up, 1);
+            y = decimate(sig(c,:), decim, 'fir');
+            sig_res(c, 1:numel(y)) = y;
         end
-    else
-        [p,q] = rat(ratio,1e-6);
-        expected_len = round(nSamp * p / q);
-        sig_res = zeros(nCh, expected_len);
-        for c = 1:nCh
-            tmp = resample(sig(c,:), p, q);
-            if length(tmp) > expected_len
-                sig_res(c,:) = tmp(1:expected_len);
-            else
-                sig_res(c,1:length(tmp)) = tmp;
-            end
-        end
+        % trim in case decimate returned slightly longer
+        sig_res = sig_res(:, 1:max(1, min(size(sig_res,2), outLens)));
+        return;
     end
+
+    % ---------- Case 2: integer-factor upsample ----------
+    u = fs_out / fs_in;
+    if fs_out > fs_in && abs(u - round(u)) < 1e-9
+        up = round(u);
+        % resample has a good interpolation/anti-imaging filter
+        sig_res = resample(sig.', up, 1).';
+        return;
+    end
+
+    % ---------- Case 3: rational resampling ----------
+    ratio = fs_out / fs_in;
+    [p,q] = rat(ratio, 1e-12);
+    sig_res = resample(sig.', p, q).';
 end
+
 % Aggregate metrics and plots (similar to v1)
 MAE_all = mean(myError, 'omitnan');
 MAE_train = mean(myError(1:12), 'omitnan');

@@ -4,8 +4,8 @@ function [BPM_est, Hacc, ACCmag25, dHacc, ddHacc] = run_wfpv_record(sig_raw, fs0
     [b125,a125] = butter(4, bpHz/(fs0/2), 'bandpass');
     fs_acc = 25;           % fixed ACC control stream for entropy
     nbits_entropy = 2;     % quantization for entropy proxy
-    window125 = round(8 * fs0);
-    step125 = round(2 * fs0);
+    window125 = 8 * fs0;
+    step125 = 2 * fs0;
 
     windowNb = floor((size(sig_raw, 2) - window125) / step125) + 1;
     if windowNb < 1
@@ -24,7 +24,6 @@ function [BPM_est, Hacc, ACCmag25, dHacc, ddHacc] = run_wfpv_record(sig_raw, fs0
 
     rangeIdx = [];
     clear W1_FFTi W11_FFTi W2_FFTi W21_FFTi W1_PPG_ave_FFT_Clean W2_PPG_ave_FFT_Clean W11_PPG_ave_FFT_Clean PPG_ave_FFT_FIN W21_PPG_ave_FFT_Clean PPG_ave_FFT_FIN;
-
 
     for i = 1:windowNb
         curSegment = (i - 1) * step125 + 1 : (i - 1) * step125 + window125;
@@ -181,39 +180,85 @@ function [BPM_est, Hacc, ACCmag25, dHacc, ddHacc] = run_wfpv_record(sig_raw, fs0
 end
 
 function sig_res = do_resample(sig, fs_in, fs_out)
-    % Resample helper that uses decimation when integer ratio, otherwise rational resample.
-    if abs(fs_out - fs_in) < eps
+%DO_RESAMPLE Resample multi-channel signal (channels x samples) with proper anti-aliasing.
+% Uses DECIMATE for integer downsampling ratios, otherwise RESAMPLE with rational p/q.
+%
+% sig:   [nCh x nSamp] (time along columns)
+% fs_in: input sample rate (Hz)
+% fs_out: output sample rate (Hz)
+
+    if abs(fs_out - fs_in) < 1e-12
         sig_res = sig;
         return;
     end
+
+    [nCh, nSamp] = size(sig);
+
+    % ---------- Case 1: integer-factor downsample ----------
+    r = fs_in / fs_out;
+    if fs_out < fs_in && abs(r - round(r)) < 1e-9
+        decim = round(r);
+        % decimate includes an anti-alias lowpass; FIR is safer for bio signals
+        outLens = ceil(nSamp / decim);
+        sig_res = zeros(nCh, outLens);
+        for c = 1:nCh
+            y = decimate(sig(c,:), decim, 'fir');
+            sig_res(c, 1:numel(y)) = y;
+        end
+        % trim in case decimate returned slightly longer
+        sig_res = sig_res(:, 1:max(1, min(size(sig_res,2), outLens)));
+        return;
+    end
+
+    % ---------- Case 2: integer-factor upsample ----------
+    u = fs_out / fs_in;
+    if fs_out > fs_in && abs(u - round(u)) < 1e-9
+        up = round(u);
+        % resample has a good interpolation/anti-imaging filter
+        sig_res = resample(sig.', up, 1).';
+        return;
+    end
+
+    % ---------- Case 3: rational resampling ----------
     ratio = fs_out / fs_in;
     [p,q] = rat(ratio, 1e-12);
-
-    % resample expects time along rows => transpose twice
     sig_res = resample(sig.', p, q).';
-    [nCh, nSamp] = size(sig);
-    if fs_out < fs_in && abs(fs_in/fs_out - round(fs_in/fs_out)) < 1e-9
-        decim = round(fs_in/fs_out);
-        sig_res = sig(:, 1:decim:end);
-    elseif fs_out > fs_in && abs(ratio - round(ratio)) < 1e-9
-        % simple upsample by integer factor (zero-order hold via resample)
-        up = round(ratio);
-        expected_len = nSamp * up;
-        sig_res = zeros(nCh, expected_len);
-        for c = 1:nCh
-            sig_res(c,:) = resample(sig(c,:), up, 1);
-        end
-    else
-        [p,q] = rat(ratio,1e-6);
-        expected_len = round(nSamp * p / q);
-        sig_res = zeros(nCh, expected_len);
-        for c = 1:nCh
-            tmp = resample(sig(c,:), p, q);
-            if length(tmp) > expected_len
-                sig_res(c,:) = tmp(1:expected_len);
-            else
-                sig_res(c,1:length(tmp)) = tmp;
-            end
-        end
-    end
 end
+
+% function sig_res = do_resample(sig, fs_in, fs_out)
+%     % Resample helper that uses decimation when integer ratio, otherwise rational resample.
+%     if abs(fs_out - fs_in) < eps
+%         sig_res = sig;
+%         return;
+%     end
+%     ratio = fs_out / fs_in;
+%     [p,q] = rat(ratio, 1e-12);
+
+%     % resample expects time along rows => transpose twice
+%     sig_res = resample(sig.', p, q).';
+%     [nCh, nSamp] = size(sig);
+%     if fs_out < fs_in && abs(fs_in/fs_out - round(fs_in/fs_out)) < 1e-9
+%         decim = round(fs_in/fs_out);
+%         sig_res = sig(:, 1:decim:end);
+%     elseif fs_out > fs_in && abs(ratio - round(ratio)) < 1e-9
+%         % simple upsample by integer factor (zero-order hold via resample)
+%         up = round(ratio);
+%         expected_len = nSamp * up;
+%         sig_res = zeros(nCh, expected_len);
+%         for c = 1:nCh
+%             sig_res(c,:) = resample(sig(c,:), up, 1);
+%         end
+%     else
+%         [p,q] = rat(ratio,1e-6);
+%         expected_len = round(nSamp * p / q);
+%         sig_res = zeros(nCh, expected_len);
+%         for c = 1:nCh
+%             tmp = resample(sig(c,:), p, q);
+%             if length(tmp) > expected_len
+%                 sig_res(c,:) = tmp(1:expected_len);
+%             else
+%                 sig_res(c,1:length(tmp)) = tmp;
+%             end
+%         end
+%     end
+% end

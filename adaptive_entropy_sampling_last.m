@@ -56,9 +56,18 @@ for idnb = 1:numel(IDData)
         ch = [2 3 4 5 6];
     end
 
+    sig_raw = sig(ch, :);
+
     window = window_sec * fs0;
     step   = step_sec   * fs0;
-    windowNb = floor((size(sig,2)-window)/step) + 1;
+    windowNb = floor((size(sig_raw,2)-window)/step) + 1;
+
+    if windowNb < 1
+        BPM_est = [];
+        Hacc = [];
+        ACCmag25= [];
+        return;
+    end
 
     BPM_est = zeros(1, windowNb);
     FsUsed  = zeros(1, windowNb);
@@ -77,15 +86,10 @@ for idnb = 1:numel(IDData)
     rangeIdx = [];
     clear W1_FFTi W11_FFTi W2_FFTi W21_FFTi W1_PPG_ave_FFT_Clean W2_PPG_ave_FFT_Clean W11_PPG_ave_FFT_Clean PPG_ave_FFT_FIN W21_PPG_ave_FFT_Clean PPG_ave_FFT_FIN;
 
+    
     for i = 1:windowNb
         curSegment = (i-1)*step+1 : (i-1)*step+window;
-        curDataRaw = sig(ch, curSegment);
-
-        % filter at 125 Hz
-        curDataFilt = zeros(size(curDataRaw));
-        for c = 1:size(curDataRaw,1)
-            curDataFilt(c,:) = filter(b125, a125, curDataRaw(c,:));
-        end
+        curDataRaw = sig_raw(:, curSegment);
 
         % Run one-frame WFPV with internal resampling (match baseline helper)
         % load in correct mode state
@@ -95,7 +99,7 @@ for idnb = 1:numel(IDData)
             state_in = state_lo;
         end
 
-        [BPM_est(i), state_out] = wfpv_one_frame(curDataRaw, fs0, fs_cur, fs_proc, FFTres, WFlength, CutoffFreqHzSearch, state_in, i, BPM_est, idnb, CutoffFreqHzBP);
+        [BPM_est(i), state_out] = wfpv_one_frame_last(curDataRaw, fs0, fs_cur, fs_proc, FFTres, WFlength, CutoffFreqHzSearch, state_in, i, BPM_est, idnb, CutoffFreqHzBP);
 
         % Save back mode state
         if fs_cur == fs_hi
@@ -104,8 +108,14 @@ for idnb = 1:numel(IDData)
             state_lo = state_out;
         end
 
+        % filter at 125 Hz
+        curDataFilt2 = zeros(size(curDataRaw));
+        for c = 1:size(curDataRaw,1)
+            curDataFilt2(c,:) = filter(b125, a125, curDataRaw(c,:));
+        end
+
         % ACC control stream at fixed 25 Hz
-        curAcc_resampled = do_resample(curDataFilt(3:5, :), fs0, fs_acc);
+        curAcc_resampled = do_resample_last(curDataFilt2(3:5, :), fs0, fs_acc);
         ACCmag25 = sqrt(curAcc_resampled(1,:).^2 + curAcc_resampled(2,:).^2 + curAcc_resampled(3,:).^2);
         ACCmag25_log(i) = mean(ACCmag25);
         Hacc(i) = entropy_proxy_hist(ACCmag25, nbits_entropy);
@@ -130,7 +140,7 @@ for idnb = 1:numel(IDData)
                 case "LOW"
                     fs_cur = fs_lo;
                     if enough_hist
-                        n_bad = sum(recent > Th_hi);         % count unstable in last 5
+                        n_bad = sum(abs(recent) > Th_hi);         % count unstable in last 5
                         if n_bad >= N_unstable
                             state_mode = "HIGH";
                             hi_timer = hi_hold;              % force HIGH for at least 15 windows
@@ -146,7 +156,7 @@ for idnb = 1:numel(IDData)
 
                     % After hold expires, exit only if ALL last 5 are stable (< Th_low)
                     if enough_hist && hi_timer == 0
-                        n_good = sum(recent < Th_low);   % count stable in last N_look_back
+                        n_good = sum(abs(recent) < Th_low);   % count stable in last N_look_back
                         if n_good >= N_stable
                             state_mode = "LOW";
                             fs_next = fs_lo;
@@ -281,7 +291,7 @@ state.rangeIdx = [];
 state.FreqRange = [];
 end
 
-function [BPM_val, state] = wfpv_one_frame(curDataRaw, fs0, fs_adc, fs_proc, FFTres, WFlength, searchHz, state, i, BPM_est, idnb, bpHz)
+function [BPM_val, state] = wfpv_one_frame_last(curDataRaw, fs0, fs_adc, fs_proc, FFTres, WFlength, searchHz, state, i, BPM_est, idnb, bpHz)
 % Bandpass at 125 Hz, resample to fs_adc, then to 25 Hz internal, then run original WFPV logic
 [b,a] = butter(4, bpHz/(fs0/2), 'bandpass');
 curDataFilt = zeros(size(curDataRaw));
@@ -289,12 +299,12 @@ for c = 1:size(curDataRaw,1)
     curDataFilt(c,:) = filter(b,a,curDataRaw(c,:));
 end
 % resample to fs_adc
-curData_adc = do_resample(curDataFilt, fs0, fs_adc);
+curData_adc = do_resample_last(curDataFilt, fs0, fs_adc);
 % resample to internal 25 Hz if needed
 if abs(fs_adc - fs_proc) < eps
     curData = curData_adc; fs = fs_proc;
 else
-    curData = do_resample(curData_adc, fs_adc, fs_proc);
+    curData = do_resample_last(curData_adc, fs_adc, fs_proc);
     fs = fs_proc;
 end
 
@@ -353,7 +363,7 @@ W11_PPG_ave_FFT_ALL = mean(W11_hist,1);
 W11_PPG_ave_FFT_ALL_norm = W11_PPG_ave_FFT_ALL / max(W11_PPG_ave_FFT_ALL + eps);
 W11_ACC_X_FFT_norm = (abs(ACC_X_FFT) .^ 2) / max(abs(ACC_X_FFT .^ 2) + eps);
 W11_ACC_Y_FFT_norm = (abs(ACC_Y_FFT) .^ 2) / max(abs(ACC_Y_FFT .^ 2) + eps);
-W11_ACC_Z_FFT_norm = (abs(ACC_Z_FFT) .^ 2) / max(abs(ACC_Z_FFT .^ 2) + eps);
+W11_ACC_Z_FFT_norm = (abs(ACC_Z_FFT) .^ 2) / max(abs(ACC_Z_FFT.^ 2) + eps);
 WF11 = (1 - 1/3 * (W11_ACC_X_FFT_norm + W11_ACC_Y_FFT_norm + W11_ACC_Z_FFT_norm) ./ (W11_PPG_ave_FFT_ALL_norm + eps));
 W11_PPG_ave_FFT_Clean = abs(PPG_ave_FFT) .* WF11;
 
@@ -384,7 +394,7 @@ W21_PPG_ave_FFT_Clean = W21_PPG_ave_FFT_Clean / std(W21_PPG_ave_FFT_Clean + eps)
 
 PPG_ave_FFT_FIN = W1_PPG_ave_FFT_Clean + W2_PPG_ave_FFT_Clean;
 
-% History tracking
+% History-tracked peak picking
 hist_int = 25;
 if idnb > 12
     if i > 15, hist_int = max(abs(diff(BPM_est(max(1,i-15):i-1)))) + 5; end
@@ -420,103 +430,48 @@ if i > 1
 end
 end
 
-function sig_res = do_resample(sig, fs_in, fs_out)
-    % Resample helper that uses decimation when integer ratio, otherwise rational resample.
-    if abs(fs_out - fs_in) < eps
+function sig_res = do_resample_last(sig, fs_in, fs_out)
+%DO_RESAMPLE Resample multi-channel signal (channels x samples) with proper anti-aliasing.
+% Uses DECIMATE for integer downsampling ratios, otherwise RESAMPLE with rational p/q.
+%
+% sig:   [nCh x nSamp] (time along columns)
+% fs_in: input sample rate (Hz)
+% fs_out: output sample rate (Hz)
+
+    if abs(fs_out - fs_in) < 1e-12
         sig_res = sig;
         return;
     end
-    ratio = fs_out / fs_in;
-    [p,q] = rat(ratio, 1e-12);
 
-    % resample expects time along rows => transpose twice
-    sig_res = resample(sig.', p, q).';
     [nCh, nSamp] = size(sig);
-    if fs_out < fs_in && abs(fs_in/fs_out - round(fs_in/fs_out)) < 1e-9
-        decim = round(fs_in/fs_out);
-        sig_res = sig(:, 1:decim:end);
-    elseif fs_out > fs_in && abs(ratio - round(ratio)) < 1e-9
-        % simple upsample by integer factor (zero-order hold via resample)
-        up = round(ratio);
-        expected_len = nSamp * up;
-        sig_res = zeros(nCh, expected_len);
+
+    % ---------- Case 1: integer-factor downsample ----------
+    r = fs_in / fs_out;
+    if fs_out < fs_in && abs(r - round(r)) < 1e-9
+        decim = round(r);
+        % decimate includes an anti-alias lowpass; FIR is safer for bio signals
+        outLens = ceil(nSamp / decim);
+        sig_res = zeros(nCh, outLens);
         for c = 1:nCh
-            sig_res(c,:) = resample(sig(c,:), up, 1);
+            y = decimate(sig(c,:), decim, 'fir');
+            sig_res(c, 1:numel(y)) = y;
         end
-    else
-        [p,q] = rat(ratio,1e-6);
-        expected_len = round(nSamp * p / q);
-        sig_res = zeros(nCh, expected_len);
-        for c = 1:nCh
-            tmp = resample(sig(c,:), p, q);
-            if length(tmp) > expected_len
-                sig_res(c,:) = tmp(1:expected_len);
-            else
-                sig_res(c,1:length(tmp)) = tmp;
-            end
-        end
-    end
-end
- 
-
-
-%% compressors choices for entropy 
-
-
-
-%% ENTROPY_PROXY_CONTEXT Entropy estimator via context modeling (order-1) + ideal arithmetic length.
-function H = entropy_proxy_context(x, nbits)
-%ENTROPY_PROXY_CONTEXT Entropy estimator via context modeling (order-1) + ideal arithmetic length.
-%   H = entropy_proxy_context(x, nbits)
-%   - x: 1D signal
-%   - nbits: number of quantization bits
-%   Returns: estimated bits per delta-symbol (lower = more predictable/compressible)
-
-    x = x(:)';
-    if numel(x) < 4
-        H = 0;
+        % trim in case decimate returned slightly longer
+        sig_res = sig_res(:, 1:max(1, min(size(sig_res,2), outLens)));
         return;
     end
 
-    % 1) Normalize + clip (robust-ish)
-    x = (x - mean(x)) / (std(x) + eps);
-    x = max(min(x, 3), -3);
-
-    % 2) Uniform quantization to L levels
-    L = 2^nbits;
-    % map [-3,3] -> [0, L-1]
-    q = round((x + 3) * (L-1) / 6);
-    q = min(max(q, 0), L-1);
-
-    % 3) Delta symbols (centered), then shift to nonnegative alphabet
-    d = diff(q);                       % range approx [-(L-1), +(L-1)]
-    S = 2*(L-1) + 1;                   % alphabet size
-    sym = d + (L-1) + 1;               % -> [1..S]
-
-    % 4) Order-1 context model: P(sym_t | sym_{t-1})
-    % We'll compute the ideal arithmetic codelength: sum -log2 P
-    alpha = 1;                         % Laplace smoothing
-    counts = zeros(S, S);              % counts(prev, curr)
-
-    % prime with first symbol as "prev"
-    prev = sym(1);
-
-    bits = 0;
-    for t = 2:numel(sym)
-        curr = sym(t);
-
-        row = counts(prev, :);
-        denom = sum(row) + alpha*S;
-        numer = row(curr) + alpha;
-        p = numer / denom;
-
-        bits = bits - log2(p);
-
-        % update model
-        counts(prev, curr) = counts(prev, curr) + 1;
-        prev = curr;
+    % ---------- Case 2: integer-factor upsample ----------
+    u = fs_out / fs_in;
+    if fs_out > fs_in && abs(u - round(u)) < 1e-9
+        up = round(u);
+        % resample has a good interpolation/anti-imaging filter
+        sig_res = resample(sig.', up, 1).';
+        return;
     end
 
-    H = bits / (numel(sym)-1);         % bits per symbol (delta)
+    % ---------- Case 3: rational resampling ----------
+    ratio = fs_out / fs_in;
+    [p,q] = rat(ratio, 1e-12);
+    sig_res = resample(sig.', p, q).';
 end
-
