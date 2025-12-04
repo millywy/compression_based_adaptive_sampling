@@ -97,7 +97,7 @@ end
 % selRecs = [1 3 5 7 8 9]; %good 
 % selRecs = [6 15 17 21 22]; %bad: rising fast
 % selRecs = [10 17 19 21]; %high BPM
-selRecs = [1 8 17 21]; %high BPM
+selRecs = [7 15 21]; %high BPM
 
 for idx = 1:numel(selRecs)
     r = selRecs(idx);
@@ -124,22 +124,22 @@ for idx = 1:numel(selRecs)
     xlabel('Time (frames)'); ylabel('HR (BPM)');
     legend('Location','best'); grid on;
 
-    % Hacc overlay on same subplot (right axis) for quick comparison
-    yyaxis right;
-    % Hacc/dHacc/ddHacc are identical across fs (ACC always 25 Hz), plot once
-    hacc_vec = est_sorted(1).Hacc;
-    dhacc_vec = est_sorted(1).dHacc;
-    ddhacc_vec = est_sorted(1).ddHacc;
-    plot(hacc_vec, '--', 'Color', 'green', 'LineWidth', 1.0, ...
-        'DisplayName', 'Hacc (25 Hz ACC)');
-    plot(dhacc_vec, '-', 'Color', [0 1 1], 'LineWidth', 1.0, ...
-        'DisplayName', 'dHacc (25 Hz ACC)');
-    % plot(ddhacc_vec, '-', 'Color', [0.6 0 0.6], 'LineWidth', 1.0, ...
-    %     'DisplayName', 'ddHacc (25 Hz ACC)');
-    yline(0.15, ':', 'Color', [0.3 0.3 0.3], 'LineWidth', 1.0, 'DisplayName', 'Ref 0.15');
-    yline(-0.15, ':', 'Color', [0.3 0.3 0.3], 'LineWidth', 1.0, 'DisplayName', 'Ref -0.15');
-    ylabel('Hacc / dHacc / ddHacc');
-    yyaxis left;
+    % % Hacc overlay on same subplot (right axis) for quick comparison
+    % yyaxis right;
+    % % Hacc/dHacc/ddHacc are identical across fs (ACC always 25 Hz), plot once
+    % hacc_vec = est_sorted(1).Hacc;
+    % dhacc_vec = est_sorted(1).dHacc;
+    % ddhacc_vec = est_sorted(1).ddHacc;
+    % plot(hacc_vec, '--', 'Color', 'green', 'LineWidth', 1.0, ...
+    %     'DisplayName', 'Hacc (25 Hz ACC)');
+    % plot(dhacc_vec, '-', 'Color', [0 1 1], 'LineWidth', 1.0, ...
+    %     'DisplayName', 'dHacc (25 Hz ACC)');
+    % % plot(ddhacc_vec, '-', 'Color', [0.6 0 0.6], 'LineWidth', 1.0, ...
+    % %     'DisplayName', 'ddHacc (25 Hz ACC)');
+    % yline(0.15, ':', 'Color', [0.3 0.3 0.3], 'LineWidth', 1.0, 'DisplayName', 'Ref 0.15');
+    % yline(-0.15, ':', 'Color', [0.3 0.3 0.3], 'LineWidth', 1.0, 'DisplayName', 'Ref -0.15');
+    % ylabel('Hacc / dHacc / ddHacc');
+    % yyaxis left;
 end
 
 %% Plot MAE vs sampling frequency
